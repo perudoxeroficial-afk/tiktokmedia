@@ -50,6 +50,8 @@ En tu chat con el bot:
 - `/help` muestra ayuda
 - `/descargar LINK` descarga directamente desde comando
 - `/stats` muestra estadísticas si tu usuario está en `ADMIN_USER_IDS`
+- `/last` muestra las últimas descargas si eres admin
+- `/errors` muestra los últimos errores guardados si eres admin
 
 ## Notas
 

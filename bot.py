@@ -125,6 +125,29 @@ def write_history(entry: dict[str, object]) -> None:
         history_file.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def read_history(limit: int = 10, statuses: set[str] | None = None) -> list[dict[str, object]]:
+    if not HISTORY_FILE.exists():
+        return []
+
+    entries: list[dict[str, object]] = []
+    with HISTORY_FILE.open("r", encoding="utf-8") as history_file:
+        for line in history_file:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if statuses and entry.get("status") not in statuses:
+                continue
+            entries.append(entry)
+
+    return entries[-limit:]
+
+
 def is_rate_limited(user_id: int) -> tuple[bool, int]:
     now = time.time()
     requests = user_requests[user_id]
@@ -234,6 +257,12 @@ def format_file_size(num_bytes: int) -> str:
             return f"{size:.1f} {unit}"
         size /= 1024
     return f"{num_bytes} B"
+
+
+def format_timestamp(timestamp: object) -> str:
+    if not isinstance(timestamp, int):
+        return "sin fecha"
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -417,6 +446,53 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.effective_user:
+        return
+
+    admin_ids = context.application.bot_data.get("admin_user_ids", set())
+    if update.effective_user.id not in admin_ids:
+        await update.message.reply_text("Ese comando es solo para admin.")
+        return
+
+    entries = read_history(limit=5)
+    if not entries:
+        await update.message.reply_text("Todavía no hay historial guardado.")
+        return
+
+    lines = ["Últimas descargas:"]
+    for entry in reversed(entries):
+        lines.append(
+            f"- {format_timestamp(entry.get('timestamp'))} | {entry.get('status')} | {entry.get('source', 'sin fuente')} | {entry.get('url', 'sin url')}"
+        )
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def errors_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.effective_user:
+        return
+
+    admin_ids = context.application.bot_data.get("admin_user_ids", set())
+    if update.effective_user.id not in admin_ids:
+        await update.message.reply_text("Ese comando es solo para admin.")
+        return
+
+    entries = read_history(limit=5, statuses={"download_failed", "send_failed"})
+    if not entries:
+        await update.message.reply_text("No hay errores recientes en el historial.")
+        return
+
+    lines = ["Últimos errores:"]
+    for entry in reversed(entries):
+        error_text = str(entry.get("error", "sin detalle"))
+        lines.append(
+            f"- {format_timestamp(entry.get('timestamp'))} | {entry.get('status')} | {error_text[:120]}"
+        )
+
+    await update.message.reply_text("\n".join(lines))
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
@@ -440,6 +516,8 @@ def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("descargar", download_command))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("last", last_command))
+    application.add_handler(CommandHandler("errors", errors_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot iniciado")
