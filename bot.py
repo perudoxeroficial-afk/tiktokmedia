@@ -134,6 +134,15 @@ def format_uptime(seconds: int) -> str:
     return f"{hours}h {minutes}m {secs}s"
 
 
+def format_file_size(num_bytes: int) -> str:
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{num_bytes} B"
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Enviame un enlace de TikTok y voy a intentar devolverte el video en la mejor version disponible. "
@@ -188,6 +197,7 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         await status.edit_text(classify_download_error(exc))
         return
 
+    file_size = format_file_size(file_path.stat().st_size)
     try:
         with file_path.open("rb") as video_file:
             await update.message.reply_video(
@@ -196,14 +206,28 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
                 supports_streaming=True,
             )
         stats["successful_downloads"] += 1
-        await status.edit_text(f"Listo. Tambien guardé una copia en:\n{saved_file}")
-    except Exception:
-        logger.exception("No se pudo enviar el video")
-        stats["failed_downloads"] += 1
-        await status.edit_text(
-            f"Pude descargar el video y quedó guardado en:\n{saved_file}\n"
-            "Pero falló el envío por Telegram. Puede ser por tamaño o por un error temporal."
-        )
+        await status.edit_text(f"Listo. Tambien guardé una copia en:\n{saved_file}\nTamaño: {file_size}")
+    except Exception as video_exc:
+        logger.exception("No se pudo enviar el video como video")
+        try:
+            with file_path.open("rb") as document_file:
+                await update.message.reply_document(
+                    document=document_file,
+                    caption=title[:1000],
+                )
+            stats["successful_downloads"] += 1
+            await status.edit_text(
+                f"Listo. Telegram no aceptó el MP4 como video, así que te lo mandé como archivo.\n"
+                f"Copia local:\n{saved_file}\nTamaño: {file_size}"
+            )
+        except Exception:
+            logger.exception("No se pudo enviar el archivo tampoco")
+            stats["failed_downloads"] += 1
+            await status.edit_text(
+                f"Pude descargar el video y quedó guardado en:\n{saved_file}\n"
+                f"Tamaño: {file_size}\n"
+                "Pero Telegram rechazó el envío. Revisa los logs de Railway para ver si fue límite de tamaño, timeout o error temporal."
+            )
     finally:
         try:
             file_path.unlink(missing_ok=True)
