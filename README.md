@@ -1,6 +1,6 @@
-# Bot de Telegram para TikTok
+# Bot de Telegram para TikTok e Instagram Reels
 
-Este proyecto crea un bot simple de Telegram que recibe enlaces de TikTok e intenta descargar el video en la mejor calidad disponible usando `yt-dlp`.
+Este proyecto crea un bot de Telegram que recibe enlaces de TikTok e Instagram Reels e intenta descargar el video en la mejor calidad disponible usando `yt-dlp`.
 
 ## 1. Instalar dependencias
 
@@ -40,7 +40,7 @@ python bot.py
 En tu chat con el bot:
 
 - envía `/start`
-- pega un enlace de TikTok o usa `/descargar https://...`
+- pega un enlace de TikTok o Instagram Reel, o usa `/descargar https://...`
 - espera la respuesta del bot
 - el archivo también quedará guardado en `downloads/`
 
@@ -55,6 +55,10 @@ En tu chat con el bot:
 
 - `yt-dlp` intenta obtener la mejor versión disponible del video.
 - Algunos videos privados, restringidos o protegidos pueden fallar.
+- El bot soporta TikTok e Instagram Reels.
 - El proyecto carga variables desde `.env` automáticamente.
 - Hay límite de 5 solicitudes por minuto por usuario.
+- El bot guarda historial en `data/download_history.jsonl`.
+- El bot reutiliza descargas repetidas desde `data/cache_index.json` cuando el archivo local sigue existiendo.
+- Las descargas nuevas hacen un reintento automático si falla el primer intento.
 - Usa esto solo con contenido que tengas derecho a descargar y reutilizar.

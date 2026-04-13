@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -24,8 +25,12 @@ logger = logging.getLogger("tiktok_bot")
 URL_PATTERN = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOADS_DIR = BASE_DIR / "downloads"
+DATA_DIR = BASE_DIR / "data"
+CACHE_INDEX_FILE = DATA_DIR / "cache_index.json"
+HISTORY_FILE = DATA_DIR / "download_history.jsonl"
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX_REQUESTS = 5
+DOWNLOAD_RETRIES = 2
 
 user_requests: dict[int, deque[float]] = defaultdict(deque)
 stats = {
@@ -33,7 +38,9 @@ stats = {
     "total_requests": 0,
     "successful_downloads": 0,
     "failed_downloads": 0,
+    "cache_hits": 0,
 }
+cache_index: dict[str, dict[str, str]] = {}
 
 
 def extract_url(text: str) -> str | None:
@@ -41,9 +48,14 @@ def extract_url(text: str) -> str | None:
     return match.group(0) if match else None
 
 
-def is_tiktok_url(url: str) -> bool:
+def is_supported_url(url: str) -> bool:
     lowered = url.lower()
-    return "tiktok.com/" in lowered or "vm.tiktok.com/" in lowered
+    return (
+        "tiktok.com/" in lowered
+        or "vm.tiktok.com/" in lowered
+        or "instagram.com/reel/" in lowered
+        or "instagram.com/reels/" in lowered
+    )
 
 
 def sanitize_filename(value: str) -> str:
@@ -69,6 +81,50 @@ def parse_admin_ids() -> set[int]:
     return admin_ids
 
 
+def ensure_storage() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_cache_index() -> dict[str, dict[str, str]]:
+    if not CACHE_INDEX_FILE.exists():
+        return {}
+
+    try:
+        data = json.loads(CACHE_INDEX_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("No se pudo leer cache_index.json, se recreará.")
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    valid_cache: dict[str, dict[str, str]] = {}
+    for url, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        path_value = entry.get("saved_file")
+        if not isinstance(path_value, str):
+            continue
+        saved_path = Path(path_value)
+        if saved_path.exists():
+            valid_cache[url] = entry
+    return valid_cache
+
+
+def save_cache_index() -> None:
+    CACHE_INDEX_FILE.write_text(
+        json.dumps(cache_index, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def write_history(entry: dict[str, object]) -> None:
+    ensure_storage()
+    with HISTORY_FILE.open("a", encoding="utf-8") as history_file:
+        history_file.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
 def is_rate_limited(user_id: int) -> tuple[bool, int]:
     now = time.time()
     requests = user_requests[user_id]
@@ -84,7 +140,7 @@ def is_rate_limited(user_id: int) -> tuple[bool, int]:
     return False, 0
 
 
-def download_tiktok(url: str) -> tuple[Path, str, Path]:
+def download_media(url: str) -> tuple[Path, str, Path]:
     temp_dir = Path(tempfile.mkdtemp(prefix="tiktok_bot_"))
     output_template = str(temp_dir / "%(id)s.%(ext)s")
     options = {
@@ -108,11 +164,48 @@ def download_tiktok(url: str) -> tuple[Path, str, Path]:
         title = info.get("title") or "video_tiktok"
         video_id = info.get("id") or file_path.stem
 
-        DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
         saved_file = DOWNLOADS_DIR / f"{sanitize_filename(title)}_{video_id}{file_path.suffix.lower() or '.mp4'}"
         shutil.copy2(file_path, saved_file)
 
         return file_path, title, saved_file
+
+
+def get_cached_file(url: str) -> tuple[Path, str] | None:
+    cached_entry = cache_index.get(url)
+    if not cached_entry:
+        return None
+
+    saved_path = Path(cached_entry["saved_file"])
+    if not saved_path.exists():
+        cache_index.pop(url, None)
+        save_cache_index()
+        return None
+
+    title = str(cached_entry.get("title", saved_path.stem))
+    return saved_path, title
+
+
+def update_cache(url: str, title: str, saved_file: Path) -> None:
+    cache_index[url] = {
+        "title": title,
+        "saved_file": str(saved_file),
+        "updated_at": str(int(time.time())),
+    }
+    save_cache_index()
+
+
+def download_with_retry(url: str) -> tuple[Path, str, Path]:
+    last_error: Exception | None = None
+    for attempt in range(1, DOWNLOAD_RETRIES + 1):
+        try:
+            return download_media(url)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Descarga falló en intento %s/%s: %s", attempt, DOWNLOAD_RETRIES, exc)
+            if attempt < DOWNLOAD_RETRIES:
+                time.sleep(2)
+
+    raise last_error if last_error else RuntimeError("No se pudo descargar el archivo.")
 
 
 def classify_download_error(exc: Exception) -> str:
@@ -154,10 +247,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Uso:\n"
-        "1. Copia el link del video de TikTok.\n"
+        "1. Copia el link del video de TikTok o Instagram Reel.\n"
         "2. Pegalo en este chat o usa /descargar LINK.\n"
         "3. Espero unos segundos y te envio el archivo.\n"
-        "4. El video tambien queda guardado en la carpeta downloads.\n\n"
+        "4. El video tambien queda guardado en la carpeta downloads y puede reutilizarse desde cache.\n\n"
         "Límite actual: 5 descargas por minuto por usuario."
     )
 
@@ -181,19 +274,37 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         await update.message.reply_text("No encontré un enlace válido en tu mensaje.")
         return
 
-    if not is_tiktok_url(url):
-        await update.message.reply_text("Por ahora este bot está configurado solo para enlaces de TikTok.")
+    if not is_supported_url(url):
+        await update.message.reply_text("Por ahora este bot acepta enlaces de TikTok e Instagram Reels.")
         return
 
     stats["total_requests"] += 1
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO)
     status = await update.message.reply_text("Procesando el enlace...")
 
+    cached_result = get_cached_file(url)
+    source_label = "descarga nueva"
     try:
-        file_path, title, saved_file = await asyncio.to_thread(download_tiktok, url)
+        if cached_result:
+            saved_file, title = cached_result
+            file_path = saved_file
+            stats["cache_hits"] += 1
+            source_label = "cache"
+        else:
+            file_path, title, saved_file = await asyncio.to_thread(download_with_retry, url)
+            update_cache(url, title, saved_file)
     except Exception as exc:
         logger.exception("No se pudo descargar el video")
         stats["failed_downloads"] += 1
+        write_history(
+            {
+                "timestamp": int(time.time()),
+                "user_id": user_id,
+                "url": url,
+                "status": "download_failed",
+                "error": str(exc),
+            }
+        )
         await status.edit_text(classify_download_error(exc))
         return
 
@@ -206,8 +317,21 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
                 supports_streaming=True,
             )
         stats["successful_downloads"] += 1
-        await status.edit_text(f"Listo. Tambien guardé una copia en:\n{saved_file}\nTamaño: {file_size}")
-    except Exception as video_exc:
+        write_history(
+            {
+                "timestamp": int(time.time()),
+                "user_id": user_id,
+                "url": url,
+                "status": "sent_video",
+                "source": source_label,
+                "saved_file": str(saved_file),
+                "file_size": file_path.stat().st_size,
+            }
+        )
+        await status.edit_text(
+            f"Listo. Fuente: {source_label}.\nCopia local:\n{saved_file}\nTamaño: {file_size}"
+        )
+    except Exception:
         logger.exception("No se pudo enviar el video como video")
         try:
             with file_path.open("rb") as document_file:
@@ -216,24 +340,47 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
                     caption=title[:1000],
                 )
             stats["successful_downloads"] += 1
+            write_history(
+                {
+                    "timestamp": int(time.time()),
+                    "user_id": user_id,
+                    "url": url,
+                    "status": "sent_document",
+                    "source": source_label,
+                    "saved_file": str(saved_file),
+                    "file_size": file_path.stat().st_size,
+                }
+            )
             await status.edit_text(
-                f"Listo. Telegram no aceptó el MP4 como video, así que te lo mandé como archivo.\n"
+                f"Listo. Fuente: {source_label}.\nTelegram no aceptó el MP4 como video, así que te lo mandé como archivo.\n"
                 f"Copia local:\n{saved_file}\nTamaño: {file_size}"
             )
         except Exception:
             logger.exception("No se pudo enviar el archivo tampoco")
             stats["failed_downloads"] += 1
+            write_history(
+                {
+                    "timestamp": int(time.time()),
+                    "user_id": user_id,
+                    "url": url,
+                    "status": "send_failed",
+                    "source": source_label,
+                    "saved_file": str(saved_file),
+                    "file_size": file_path.stat().st_size,
+                }
+            )
             await status.edit_text(
                 f"Pude descargar el video y quedó guardado en:\n{saved_file}\n"
                 f"Tamaño: {file_size}\n"
                 "Pero Telegram rechazó el envío. Revisa los logs de Railway para ver si fue límite de tamaño, timeout o error temporal."
             )
     finally:
-        try:
-            file_path.unlink(missing_ok=True)
-            shutil.rmtree(file_path.parent, ignore_errors=True)
-        except OSError:
-            logger.warning("No se pudo limpiar el archivo temporal %s", file_path)
+        if file_path != saved_file:
+            try:
+                file_path.unlink(missing_ok=True)
+                shutil.rmtree(file_path.parent, ignore_errors=True)
+            except OSError:
+                logger.warning("No se pudo limpiar el archivo temporal %s", file_path)
 
 
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -265,6 +412,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"- solicitudes totales: {stats['total_requests']}\n"
         f"- descargas exitosas: {stats['successful_downloads']}\n"
         f"- descargas fallidas: {stats['failed_downloads']}\n"
+        f"- aciertos de cache: {stats['cache_hits']}\n"
         f"- usuarios registrados en memoria: {active_users}"
     )
 
@@ -278,6 +426,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def main() -> None:
     load_dotenv()
+    ensure_storage()
+    cache_index.update(load_cache_index())
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError(
