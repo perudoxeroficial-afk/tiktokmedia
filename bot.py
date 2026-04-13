@@ -66,6 +66,13 @@ def is_supported_url(url: str) -> bool:
     )
 
 
+def detect_platform(url: str) -> str:
+    lowered = url.lower()
+    if "instagram.com/reel/" in lowered or "instagram.com/reels/" in lowered:
+        return "Instagram Reel"
+    return "TikTok"
+
+
 def sanitize_filename(value: str) -> str:
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "", value).strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
@@ -395,9 +402,12 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         await update.message.reply_text("Por ahora este bot acepta enlaces de TikTok e Instagram Reels.")
         return
 
+    platform_name = detect_platform(url)
     stats["total_requests"] += 1
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO)
-    status = await update.message.reply_text("Procesando el enlace...")
+    status = await update.message.reply_text(
+        f"{platform_name} detectado.\nAnalizando link..."
+    )
 
     cached_result = get_cached_file(url)
     source_label = "descarga nueva"
@@ -407,7 +417,13 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             file_path = saved_file
             stats["cache_hits"] += 1
             source_label = "cache"
+            await status.edit_text(
+                f"{platform_name} detectado.\nAnalizando link...\nDescargando video...\nCache encontrada."
+            )
         else:
+            await status.edit_text(
+                f"{platform_name} detectado.\nAnalizando link...\nDescargando video..."
+            )
             file_path, title, saved_file = await asyncio.to_thread(download_with_retry, url)
             update_cache(url, title, saved_file)
     except Exception as exc:
@@ -426,6 +442,9 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         return
 
     file_size = format_file_size(file_path.stat().st_size)
+    await status.edit_text(
+        f"{platform_name} detectado.\nAnalizando link...\nDescargando video...\nEnviando archivo..."
+    )
     try:
         with file_path.open("rb") as video_file:
             await update.message.reply_video(
