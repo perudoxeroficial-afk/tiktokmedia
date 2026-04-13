@@ -16,7 +16,14 @@ pip install -r requirements.txt
 
 ## 3. Configurar el token
 
-En PowerShell:
+Opción recomendada: crea un archivo `.env` en esta carpeta con este contenido:
+
+```env
+TELEGRAM_BOT_TOKEN=AQUI_TU_TOKEN
+ADMIN_USER_IDS=123456789
+```
+
+También puedes usar PowerShell:
 
 ```powershell
 $env:TELEGRAM_BOT_TOKEN="AQUI_TU_TOKEN"
@@ -33,11 +40,21 @@ python bot.py
 En tu chat con el bot:
 
 - envía `/start`
-- pega un enlace de TikTok
+- pega un enlace de TikTok o usa `/descargar https://...`
 - espera la respuesta del bot
+- el archivo también quedará guardado en `downloads/`
+
+## 6. Comandos
+
+- `/start` muestra bienvenida
+- `/help` muestra ayuda
+- `/descargar LINK` descarga directamente desde comando
+- `/stats` muestra estadísticas si tu usuario está en `ADMIN_USER_IDS`
 
 ## Notas
 
 - `yt-dlp` intenta obtener la mejor versión disponible del video.
 - Algunos videos privados, restringidos o protegidos pueden fallar.
+- El proyecto carga variables desde `.env` automáticamente.
+- Hay límite de 5 solicitudes por minuto por usuario.
 - Usa esto solo con contenido que tengas derecho a descargar y reutilizar.
