@@ -304,6 +304,21 @@ def build_inline_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def build_post_download_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Descargar otro", callback_data="menu_download"),
+                InlineKeyboardButton("Ver estado", callback_data="menu_status"),
+            ],
+            [
+                InlineKeyboardButton("Ayuda", callback_data="menu_help"),
+                InlineKeyboardButton("Menu", callback_data="menu_home"),
+            ],
+        ]
+    )
+
+
 def is_admin_user(application: Application, user_id: int | None) -> bool:
     if user_id is None:
         return False
@@ -350,6 +365,25 @@ def build_status_text() -> str:
         f"Solicitudes: {stats['total_requests']}\n"
         f"Exitosas: {stats['successful_downloads']}\n"
         f"Cache hits: {stats['cache_hits']}"
+    )
+
+
+def build_success_text(platform_name: str, source_label: str, saved_file: Path, file_size: str) -> str:
+    return (
+        f"<b>{platform_name} listo</b>\n\n"
+        f"Fuente: <b>{source_label}</b>\n"
+        f"Tamaño: <b>{file_size}</b>\n"
+        f"Guardado en:\n<code>{saved_file}</code>"
+    )
+
+
+def build_document_success_text(platform_name: str, source_label: str, saved_file: Path, file_size: str) -> str:
+    return (
+        f"<b>{platform_name} listo</b>\n\n"
+        f"Telegram no aceptó el MP4 como video, así que te lo mandé como archivo.\n"
+        f"Fuente: <b>{source_label}</b>\n"
+        f"Tamaño: <b>{file_size}</b>\n"
+        f"Guardado en:\n<code>{saved_file}</code>"
     )
 
 
@@ -465,7 +499,9 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             }
         )
         await status.edit_text(
-            f"Listo. Fuente: {source_label}.\nCopia local:\n{saved_file}\nTamaño: {file_size}"
+            build_success_text(platform_name, source_label, saved_file, file_size),
+            parse_mode="HTML",
+            reply_markup=build_post_download_menu(),
         )
     except Exception:
         logger.exception("No se pudo enviar el video como video")
@@ -488,8 +524,9 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
                 }
             )
             await status.edit_text(
-                f"Listo. Fuente: {source_label}.\nTelegram no aceptó el MP4 como video, así que te lo mandé como archivo.\n"
-                f"Copia local:\n{saved_file}\nTamaño: {file_size}"
+                build_document_success_text(platform_name, source_label, saved_file, file_size),
+                parse_mode="HTML",
+                reply_markup=build_post_download_menu(),
             )
         except Exception:
             logger.exception("No se pudo enviar el archivo tampoco")
@@ -508,7 +545,8 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             await status.edit_text(
                 f"Pude descargar el video y quedó guardado en:\n{saved_file}\n"
                 f"Tamaño: {file_size}\n"
-                "Pero Telegram rechazó el envío. Revisa los logs de Railway para ver si fue límite de tamaño, timeout o error temporal."
+                "Pero Telegram rechazó el envío. Revisa los logs de Railway para ver si fue límite de tamaño, timeout o error temporal.",
+                reply_markup=build_post_download_menu(),
             )
     finally:
         if file_path != saved_file:
