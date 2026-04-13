@@ -7,12 +7,19 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.constants import ChatAction
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 import yt_dlp
 
 
@@ -41,6 +48,7 @@ stats = {
     "cache_hits": 0,
 }
 cache_index: dict[str, dict[str, str]] = {}
+QUICK_ACTIONS = {"descargar", "ayuda", "estado", "menu"}
 
 
 def extract_url(text: str) -> str | None:
@@ -265,22 +273,102 @@ def format_timestamp(timestamp: object) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
 
 
+def build_main_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [["Descargar", "Ayuda"], ["Estado", "Menu"]],
+        resize_keyboard=True,
+        input_field_placeholder="Pega un link o usa un botón",
+    )
+
+
+def build_inline_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton("Descargar", callback_data="menu_download"),
+            InlineKeyboardButton("Ayuda", callback_data="menu_help"),
+        ],
+        [
+            InlineKeyboardButton("Estado", callback_data="menu_status"),
+            InlineKeyboardButton("Menu", callback_data="menu_home"),
+        ],
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton("Panel Admin", callback_data="menu_admin")])
+    return InlineKeyboardMarkup(rows)
+
+
+def is_admin_user(application: Application, user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    admin_ids = application.bot_data.get("admin_user_ids", set())
+    return user_id in admin_ids
+
+
+def build_welcome_text(first_name: str | None) -> str:
+    greeting_name = first_name or "bro"
+    return (
+        f"<b>TikSaveBot</b>\n"
+        f"Hola, {greeting_name}.\n\n"
+        f"Estoy online para descargar videos de <b>TikTok</b> e <b>Instagram Reels</b>.\n"
+        f"Solo pega el link y yo me encargo del resto.\n\n"
+        f"<b>Lo que hago:</b>\n"
+        f"- Descarga rapida\n"
+        f"- Cache para enlaces repetidos\n"
+        f"- Reintento automatico si falla\n"
+        f"- Envio como video o archivo si hace falta"
+    )
+
+
+def build_help_text() -> str:
+    return (
+        "<b>Como usar TikSaveBot</b>\n\n"
+        "1. Toca <b>Descargar</b> o pega tu link directo.\n"
+        "2. Espera unos segundos.\n"
+        "3. Recibe el video en el chat.\n\n"
+        "<b>Comandos:</b>\n"
+        "/start\n"
+        "/help\n"
+        "/descargar LINK\n"
+        "/estado\n"
+        "/menu"
+    )
+
+
+def build_status_text() -> str:
+    uptime = format_uptime(int(time.time() - stats["started_at"]))
+    return (
+        "<b>Estado del bot</b>\n\n"
+        f"Online: si\n"
+        f"Uptime: {uptime}\n"
+        f"Solicitudes: {stats['total_requests']}\n"
+        f"Exitosas: {stats['successful_downloads']}\n"
+        f"Cache hits: {stats['cache_hits']}"
+    )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
     await update.message.reply_text(
-        "Enviame un enlace de TikTok y voy a intentar devolverte el video en la mejor version disponible. "
-        "Tambien voy a guardar una copia local en la carpeta downloads.\n\n"
-        "Tip: también puedes usar /descargar seguido del link."
+        build_welcome_text(update.effective_user.first_name if update.effective_user else None),
+        parse_mode="HTML",
+        reply_markup=build_main_keyboard(),
+    )
+    await update.message.reply_text(
+        "Elige una accion rapida:",
+        reply_markup=build_inline_menu(is_admin_user(context.application, update.effective_user.id if update.effective_user else None)),
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
     await update.message.reply_text(
-        "Uso:\n"
-        "1. Copia el link del video de TikTok o Instagram Reel.\n"
-        "2. Pegalo en este chat o usa /descargar LINK.\n"
-        "3. Espero unos segundos y te envio el archivo.\n"
-        "4. El video tambien queda guardado en la carpeta downloads y puede reutilizarse desde cache.\n\n"
-        "Límite actual: 5 descargas por minuto por usuario."
+        build_help_text(),
+        parse_mode="HTML",
+        reply_markup=build_inline_menu(is_admin_user(context.application, update.effective_user.id if update.effective_user else None)),
     )
 
 
@@ -424,6 +512,17 @@ async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await process_download(update, context, text)
 
 
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
+    await update.message.reply_text(
+        build_status_text(),
+        parse_mode="HTML",
+        reply_markup=build_inline_menu(is_admin_user(context.application, update.effective_user.id if update.effective_user else None)),
+    )
+
+
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_user:
         return
@@ -493,11 +592,135 @@ async def errors_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text("\n".join(lines))
 
 
+async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.effective_user:
+        return
+
+    admin_ids = context.application.bot_data.get("admin_user_ids", set())
+    if update.effective_user.id not in admin_ids:
+        await update.message.reply_text("Ese comando es solo para admin.")
+        return
+
+    entries = read_history(limit=200)
+    if not entries:
+        await update.message.reply_text("Todavía no hay suficiente historial para calcular top.")
+        return
+
+    url_counter: Counter[str] = Counter()
+    user_counter: Counter[str] = Counter()
+
+    for entry in entries:
+        url = str(entry.get("url", "")).strip()
+        if url:
+            url_counter[url] += 1
+
+        user_id = entry.get("user_id")
+        if isinstance(user_id, int):
+            user_counter[str(user_id)] += 1
+
+    top_urls = url_counter.most_common(3)
+    top_users = user_counter.most_common(3)
+
+    lines = ["Top reciente del bot:"]
+    if top_urls:
+        lines.append("Links más repetidos:")
+        for url, count in top_urls:
+            lines.append(f"- {count}x | {url}")
+
+    if top_users:
+        lines.append("Usuarios más activos:")
+        for user_id, count in top_users:
+            lines.append(f"- {count} solicitudes | user_id {user_id}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
+    await update.message.reply_text(
+        "Menu principal de TikSaveBot:",
+        reply_markup=build_inline_menu(is_admin_user(context.application, update.effective_user.id if update.effective_user else None)),
+    )
+
+
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.message:
+        return
+
+    await query.answer()
+    admin = is_admin_user(context.application, update.effective_user.id if update.effective_user else None)
+
+    if query.data == "menu_download":
+        await query.message.reply_text(
+            "Pega aqui tu link de TikTok o Instagram Reel y lo proceso.",
+            reply_markup=build_main_keyboard(),
+        )
+        return
+
+    if query.data == "menu_help":
+        await query.message.reply_text(build_help_text(), parse_mode="HTML", reply_markup=build_inline_menu(admin))
+        return
+
+    if query.data == "menu_status":
+        await query.message.reply_text(build_status_text(), parse_mode="HTML", reply_markup=build_inline_menu(admin))
+        return
+
+    if query.data == "menu_admin":
+        if not admin:
+            await query.message.reply_text("Ese panel es solo para admin.")
+            return
+        await query.message.reply_text(
+            "<b>Panel Admin</b>\n\nUsa:\n/stats\n/last\n/errors\n/top",
+            parse_mode="HTML",
+            reply_markup=build_inline_menu(admin),
+        )
+        return
+
+    await query.message.reply_text(
+        build_welcome_text(update.effective_user.first_name if update.effective_user else None),
+        parse_mode="HTML",
+        reply_markup=build_inline_menu(admin),
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
 
+    lowered = update.message.text.strip().lower()
+    if lowered == "descargar":
+        await update.message.reply_text("Pega tu link de TikTok o Instagram Reel y lo descargo.")
+        return
+    if lowered == "ayuda":
+        await help_command(update, context)
+        return
+    if lowered == "estado":
+        await status_command(update, context)
+        return
+    if lowered == "menu":
+        await menu_command(update, context)
+        return
+
     await process_download(update, context, update.message.text)
+
+
+async def post_init(application: Application) -> None:
+    await application.bot.set_my_commands(
+        [
+            BotCommand("start", "Inicia TikSaveBot"),
+            BotCommand("help", "Muestra la ayuda"),
+            BotCommand("descargar", "Descarga un link"),
+            BotCommand("estado", "Muestra si el bot está online"),
+            BotCommand("menu", "Abre el menu rapido"),
+            BotCommand("stats", "Estadisticas admin"),
+            BotCommand("last", "Ultimas descargas admin"),
+            BotCommand("errors", "Ultimos errores admin"),
+            BotCommand("top", "Top reciente admin"),
+        ]
+    )
 
 
 def main() -> None:
@@ -510,14 +733,18 @@ def main() -> None:
             "Falta la variable de entorno TELEGRAM_BOT_TOKEN. Configúrala antes de iniciar el bot."
         )
 
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).post_init(post_init).build()
     application.bot_data["admin_user_ids"] = parse_admin_ids()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("descargar", download_command))
+    application.add_handler(CommandHandler("estado", status_command))
+    application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("last", last_command))
     application.add_handler(CommandHandler("errors", errors_command))
+    application.add_handler(CommandHandler("top", top_command))
+    application.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu_"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot iniciado")

@@ -49,15 +49,19 @@ En tu chat con el bot:
 - `/start` muestra bienvenida
 - `/help` muestra ayuda
 - `/descargar LINK` descarga directamente desde comando
+- `/estado` muestra si el bot sigue online
+- `/menu` abre el menu rapido con botones
 - `/stats` muestra estadísticas si tu usuario está en `ADMIN_USER_IDS`
 - `/last` muestra las últimas descargas si eres admin
 - `/errors` muestra los últimos errores guardados si eres admin
+- `/top` muestra links y usuarios más activos si eres admin
 
 ## Notas
 
 - `yt-dlp` intenta obtener la mejor versión disponible del video.
 - Algunos videos privados, restringidos o protegidos pueden fallar.
 - El bot soporta TikTok e Instagram Reels.
+- El bot incluye teclado rapido y botones inline para que se vea más llamativo en Telegram.
 - El proyecto carga variables desde `.env` automáticamente.
 - Hay límite de 5 solicitudes por minuto por usuario.
 - El bot guarda historial en `data/download_history.jsonl`.
