@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -104,7 +105,114 @@ def collect_photo_urls_from_obj(obj: object, found: list[str], seen: set[str]) -
             found.append(normalized)
 
 
-def extract_tiktok_photo_post(url: str) -> tuple[list[str], str]:
+def collect_audio_urls_from_obj(obj: object, found: list[str], seen: set[str]) -> None:
+    if isinstance(obj, dict):
+        for value in obj.values():
+            collect_audio_urls_from_obj(value, found, seen)
+        return
+
+    if isinstance(obj, list):
+        for value in obj:
+            collect_audio_urls_from_obj(value, found, seen)
+        return
+
+    if not isinstance(obj, str):
+        return
+
+    lowered = obj.lower()
+    if "muscdn.com" not in lowered:
+        return
+
+    if not any(ext in lowered for ext in (".mp3", ".m4a", ".aac", ".wav")):
+        return
+
+    normalized = obj.replace("http://", "https://")
+    if normalized not in seen:
+        seen.add(normalized)
+        found.append(normalized)
+
+
+def download_binary_file(url: str, destination: Path) -> None:
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=30) as response, destination.open("wb") as output_file:
+        shutil.copyfileobj(response, output_file)
+
+
+def build_photo_video(
+    photo_urls: list[str],
+    audio_url: str | None,
+    title: str,
+    video_id: str,
+) -> tuple[Path, Path, bool]:
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("FFmpeg no está disponible para convertir la publicación de fotos en video.")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="tiktok_photo_"))
+    image_paths: list[Path] = []
+    for index, photo_url in enumerate(photo_urls, start=1):
+        image_path = temp_dir / f"frame_{index:03d}.webp"
+        download_binary_file(photo_url, image_path)
+        image_paths.append(image_path)
+
+    audio_path: Path | None = None
+    has_audio = False
+    if audio_url:
+        try:
+            audio_path = temp_dir / "audio_track.m4a"
+            download_binary_file(audio_url, audio_path)
+            has_audio = True
+        except Exception:
+            logger.warning("No se pudo descargar el audio del post de fotos, se enviará sin sonido.")
+            audio_path = None
+
+    output_path = temp_dir / "photo_post.mp4"
+    safe_name = sanitize_filename(title)
+    saved_file = DOWNLOADS_DIR / f"{safe_name}_{video_id}.mp4"
+
+    command = ["ffmpeg", "-y"]
+    per_image_duration = 1.8
+    for image_path in image_paths:
+        command.extend(["-loop", "1", "-t", str(per_image_duration), "-i", str(image_path)])
+
+    filter_parts = []
+    concat_inputs = []
+    for index in range(len(image_paths)):
+        filter_parts.append(
+            f"[{index}:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
+            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"fps=30,format=yuv420p[v{index}]"
+        )
+        concat_inputs.append(f"[v{index}]")
+
+    filter_complex = ";".join(filter_parts + [f"{''.join(concat_inputs)}concat=n={len(image_paths)}:v=1:a=0[vout]"])
+    command.extend(["-filter_complex", filter_complex, "-map", "[vout]"])
+
+    if audio_path:
+        command.extend(["-i", str(audio_path), "-map", f"{len(image_paths)}:a", "-shortest"])
+
+    command.extend(
+        [
+            "-movflags",
+            "+faststart",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            "30",
+            str(output_path),
+        ]
+    )
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"No se pudo convertir la publicación de fotos en video: {result.stderr.strip()[:300]}")
+
+    shutil.copy2(output_path, saved_file)
+    return output_path, saved_file, has_audio
+
+
+def extract_tiktok_photo_post(url: str) -> tuple[list[str], str, str | None, str]:
     html = fetch_html(url)
     script_match = re.search(
         r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">(.*?)</script>',
@@ -117,6 +225,8 @@ def extract_tiktok_photo_post(url: str) -> tuple[list[str], str]:
     root = data.get("__DEFAULT_SCOPE__", {})
     photo_urls: list[str] = []
     collect_photo_urls_from_obj(root, photo_urls, set())
+    audio_urls: list[str] = []
+    collect_audio_urls_from_obj(root, audio_urls, set())
 
     if not photo_urls:
         raise RuntimeError("No encontré fotos disponibles en esa publicación.")
@@ -126,7 +236,20 @@ def extract_tiktok_photo_post(url: str) -> tuple[list[str], str]:
     if title_match:
         title = re.sub(r"\s+", " ", title_match.group(1)).strip()[:1000] or title
 
-    return photo_urls, title
+    if title.lower() == "tiktok - make your day":
+        url_match = re.search(r"tiktok\.com/@([^/]+)/photo/(\d+)", url, re.IGNORECASE)
+        if url_match:
+            username = url_match.group(1)
+            title = f"Publicacion de fotos de @{username}"
+            video_id = url_match.group(2)
+        else:
+            video_id = str(int(time.time()))
+    else:
+        url_match = re.search(r"/photo/(\d+)", url, re.IGNORECASE)
+        video_id = url_match.group(1) if url_match else str(int(time.time()))
+
+    audio_url = audio_urls[0] if audio_urls else None
+    return photo_urls, title, audio_url, video_id
 
 
 def sanitize_filename(value: str) -> str:
@@ -264,7 +387,7 @@ def download_media(url: str) -> tuple[Path, str, Path]:
         return file_path, title, saved_file
 
 
-def get_cached_file(url: str) -> tuple[Path, str] | None:
+def get_cached_file(url: str) -> tuple[Path, str, bool | None] | None:
     cached_entry = cache_index.get(url)
     if not cached_entry:
         return None
@@ -276,15 +399,20 @@ def get_cached_file(url: str) -> tuple[Path, str] | None:
         return None
 
     title = str(cached_entry.get("title", saved_path.stem))
-    return saved_path, title
+    has_audio = cached_entry.get("has_audio")
+    if not isinstance(has_audio, bool):
+        has_audio = None
+    return saved_path, title, has_audio
 
 
-def update_cache(url: str, title: str, saved_file: Path) -> None:
+def update_cache(url: str, title: str, saved_file: Path, has_audio: bool | None = None) -> None:
     cache_index[url] = {
         "title": title,
         "saved_file": str(saved_file),
         "updated_at": str(int(time.time())),
     }
+    if has_audio is not None:
+        cache_index[url]["has_audio"] = has_audio
     save_cache_index()
 
 
@@ -305,7 +433,7 @@ def download_with_retry(url: str) -> tuple[Path, str, Path]:
 def classify_download_error(exc: Exception) -> str:
     message = str(exc).lower()
     if "unsupported url" in message and "/photo/" in message:
-        return "Ese enlace corresponde a una publicación de fotos de TikTok. Ahora mismo el bot está preparado para videos y reels, no para posts tipo photo."
+        return "Ese enlace corresponde a una publicación de fotos de TikTok. Detecté el carrusel, pero no pude convertirlo o entregarlo correctamente."
     if "private" in message or "status code 10204" in message:
         return "Ese video parece privado o no está disponible públicamente."
     if "login" in message or "sign in" in message:
@@ -392,6 +520,7 @@ def build_welcome_text(first_name: str | None) -> str:
         f"Tu asistente para descargar videos de <b>TikTok</b> e <b>Instagram Reels</b> con una experiencia rápida y cuidada.\n\n"
         f"<b>Servicios disponibles</b>\n"
         f"• Descarga de video optimizada\n"
+        f"• Conversion de publicaciones photo de TikTok a video\n"
         f"• Cache inteligente para enlaces repetidos\n"
         f"• Reintento automático ante fallos temporales\n"
         f"• Entrega como video o archivo según disponibilidad"
@@ -404,6 +533,7 @@ def build_help_text() -> str:
         "1. Selecciona <b>Descargar</b> o pega tu enlace directo.\n"
         "2. Espera unos segundos mientras proceso tu solicitud.\n"
         "3. Recibe el resultado en este mismo chat.\n\n"
+        "Tambien puedo convertir publicaciones <b>photo</b> de TikTok en video para una entrega mas comoda.\n\n"
         "<b>Comandos principales</b>\n"
         "/start\n"
         "/help\n"
@@ -446,6 +576,14 @@ def build_document_success_text(platform_name: str, source_label: str, saved_fil
         f"Telegram no aceptó el MP4 como video, por lo que fue enviado como archivo.\n"
         f"• Archivo:\n<code>{saved_file}</code>"
     )
+
+
+def describe_photo_delivery_source(source_label: str, has_audio: bool | None) -> str:
+    if has_audio is True:
+        return f"{source_label} con audio"
+    if has_audio is False:
+        return f"{source_label} sin audio"
+    return f"{source_label} con audio no disponible"
 
 
 def build_progress_text(platform_name: str, stage: str, source_label: str | None = None) -> str:
@@ -561,7 +699,7 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
     source_label = "descarga nueva"
     try:
         if cached_result:
-            saved_file, title = cached_result
+            saved_file, title, _ = cached_result
             file_path = saved_file
             stats["cache_hits"] += 1
             source_label = "cache"
@@ -691,19 +829,79 @@ async def process_tiktok_photo_post(
 
     platform_name = "TikTok Photo"
     stats["total_requests"] += 1
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO)
     status = await update.message.reply_text(
         build_progress_text(platform_name, "analyzing"),
         parse_mode="HTML",
     )
 
+    cached_result = get_cached_file(url)
+    source_label = "publicacion convertida"
+    photo_urls: list[str] = []
+    title = "Publicacion de fotos de TikTok"
     try:
-        await status.edit_text(
-            build_progress_text(platform_name, "downloading", "galeria de fotos"),
-            parse_mode="HTML",
-        )
-        photo_urls, title = await asyncio.to_thread(extract_tiktok_photo_post, url)
+        if cached_result:
+            saved_file, title, has_audio = cached_result
+            file_path = saved_file
+            source_label = "cache"
+            stats["cache_hits"] += 1
+            await status.edit_text(
+                build_progress_text(platform_name, "cached", source_label),
+                parse_mode="HTML",
+            )
+        else:
+            await status.edit_text(
+                build_progress_text(platform_name, "downloading", "carrusel premium"),
+                parse_mode="HTML",
+            )
+            photo_urls, title, audio_url, video_id = await asyncio.to_thread(extract_tiktok_photo_post, url)
+            file_path, saved_file, has_audio = await asyncio.to_thread(
+                build_photo_video,
+                photo_urls,
+                audio_url,
+                title,
+                video_id,
+            )
+            update_cache(url, title, saved_file, has_audio)
     except Exception as exc:
-        logger.exception("No se pudo extraer la publicación de fotos")
+        logger.exception("No se pudo convertir la publicación de fotos en video")
+        if photo_urls:
+            await status.edit_text(
+                build_progress_text(platform_name, "sending", "galeria de respaldo"),
+                parse_mode="HTML",
+            )
+            try:
+                chunks = [photo_urls[i:i + 10] for i in range(0, len(photo_urls), 10)]
+                for chunk_index, chunk in enumerate(chunks):
+                    media_group = []
+                    for idx, photo_url in enumerate(chunk):
+                        caption = title[:1000] if chunk_index == 0 and idx == 0 else None
+                        media_group.append(InputMediaPhoto(media=photo_url, caption=caption))
+                    await update.message.reply_media_group(media=media_group)
+
+                stats["successful_downloads"] += 1
+                write_history(
+                    {
+                        "timestamp": int(time.time()),
+                        "user_id": user_id,
+                        "url": url,
+                        "status": "sent_photo_gallery_fallback",
+                        "source": "galeria_respaldo",
+                    }
+                )
+                await status.edit_text(
+                    "━━━━ <b>Entrega completada</b> ━━━━\n\n"
+                    f"• Plataforma: <b>{platform_name}</b>\n"
+                    "• Origen: <b>galeria de respaldo</b>\n"
+                    "• Estado: <b>entregado</b>\n"
+                    "• Audio: <b>no disponible para esta publicacion</b>",
+                    parse_mode="HTML",
+                    reply_markup=build_post_download_menu(),
+                )
+                return
+            except Exception:
+                logger.exception("No se pudo enviar tampoco la galería de respaldo")
+
         stats["failed_downloads"] += 1
         write_history(
             {
@@ -715,66 +913,104 @@ async def process_tiktok_photo_post(
             }
         )
         await status.edit_text(
-            f"◆ <b>No fue posible leer la publicación de fotos</b>\n\n{str(exc)}",
+            f"◆ <b>No fue posible completar la publicacion de fotos</b>\n\n{str(exc)}",
             parse_mode="HTML",
             reply_markup=build_post_download_menu(),
         )
         return
 
     await status.edit_text(
-        build_progress_text(platform_name, "sending", "galeria de fotos"),
+        build_progress_text(platform_name, "sending", source_label),
         parse_mode="HTML",
     )
 
     try:
-        chunks = [photo_urls[i:i + 10] for i in range(0, len(photo_urls), 10)]
-        for chunk_index, chunk in enumerate(chunks):
-            media_group = []
-            for idx, photo_url in enumerate(chunk):
-                caption = None
-                if chunk_index == 0 and idx == 0:
-                    caption = title[:1000]
-                media_group.append(InputMediaPhoto(media=photo_url, caption=caption))
-            await update.message.reply_media_group(media=media_group)
-
+        file_size = format_file_size(file_path.stat().st_size)
+        with file_path.open("rb") as video_file:
+            await update.message.reply_video(
+                video=video_file,
+                caption=title[:1000],
+                supports_streaming=True,
+            )
         stats["successful_downloads"] += 1
         write_history(
             {
                 "timestamp": int(time.time()),
                 "user_id": user_id,
                 "url": url,
-                "status": "sent_photo_post",
-                "source": "photo_post",
-                "photo_count": len(photo_urls),
+                "status": "sent_photo_video",
+                "source": source_label,
+                "saved_file": str(saved_file),
+                "file_size": file_path.stat().st_size,
+                "has_audio": has_audio,
             }
         )
         await status.edit_text(
-            "━━━━ <b>Entrega completada</b> ━━━━\n\n"
-            f"• Plataforma: <b>{platform_name}</b>\n"
-            "• Origen: <b>publicación de fotos</b>\n"
-            f"• Total de imágenes: <b>{len(photo_urls)}</b>\n"
-            "• Estado: <b>entregado</b>",
+            build_success_text(
+                platform_name,
+                describe_photo_delivery_source(source_label, has_audio),
+                saved_file,
+                file_size,
+            ),
             parse_mode="HTML",
             reply_markup=build_post_download_menu(),
         )
     except Exception as exc:
-        logger.exception("No se pudo enviar la galería de fotos")
-        stats["failed_downloads"] += 1
-        write_history(
-            {
-                "timestamp": int(time.time()),
-                "user_id": user_id,
-                "url": url,
-                "status": "photo_send_failed",
-                "error": str(exc),
-            }
-        )
-        await status.edit_text(
-            "◆ <b>La publicación fue detectada, pero no pude entregarla</b>\n\n"
-            "Telegram rechazó el envío de la galería o la fuente no respondió como se esperaba.",
-            parse_mode="HTML",
-            reply_markup=build_post_download_menu(),
-        )
+        logger.exception("No se pudo enviar el carrusel convertido como video")
+        try:
+            file_size = format_file_size(file_path.stat().st_size)
+            with file_path.open("rb") as document_file:
+                await update.message.reply_document(
+                    document=document_file,
+                    caption=title[:1000],
+                )
+            stats["successful_downloads"] += 1
+            write_history(
+                {
+                    "timestamp": int(time.time()),
+                    "user_id": user_id,
+                    "url": url,
+                    "status": "sent_photo_document",
+                    "source": source_label,
+                    "saved_file": str(saved_file),
+                    "file_size": file_path.stat().st_size,
+                    "has_audio": has_audio,
+                }
+            )
+            await status.edit_text(
+                build_document_success_text(
+                    platform_name,
+                    describe_photo_delivery_source(source_label, has_audio),
+                    saved_file,
+                    file_size,
+                ),
+                parse_mode="HTML",
+                reply_markup=build_post_download_menu(),
+            )
+        except Exception:
+            stats["failed_downloads"] += 1
+            write_history(
+                {
+                    "timestamp": int(time.time()),
+                    "user_id": user_id,
+                    "url": url,
+                    "status": "photo_send_failed",
+                    "error": str(exc),
+                }
+            )
+            await status.edit_text(
+                "◆ <b>La publicación fue convertida, pero no pude entregarla</b>\n\n"
+                "El carrusel quedó procesado, aunque Telegram rechazó el envío del archivo.",
+                parse_mode="HTML",
+                reply_markup=build_post_download_menu(),
+            )
+    finally:
+        if 'file_path' in locals() and file_path != saved_file:
+            try:
+                file_path.unlink(missing_ok=True)
+                shutil.rmtree(file_path.parent, ignore_errors=True)
+            except OSError:
+                logger.warning("No se pudo limpiar el archivo temporal %s", file_path)
 
 
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
