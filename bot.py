@@ -8,9 +8,11 @@ import tempfile
 import time
 from pathlib import Path
 from collections import Counter, defaultdict, deque
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
@@ -71,6 +73,60 @@ def detect_platform(url: str) -> str:
     if "instagram.com/reel/" in lowered or "instagram.com/reels/" in lowered:
         return "Instagram Reel"
     return "TikTok"
+
+
+def is_tiktok_photo_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return "tiktok.com" in parsed.netloc.lower() and "/photo/" in parsed.path.lower()
+
+
+def fetch_html(url: str) -> str:
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=30) as response:
+        return response.read().decode("utf-8", errors="ignore")
+
+
+def collect_photo_urls_from_obj(obj: object, found: list[str], seen: set[str]) -> None:
+    if isinstance(obj, dict):
+        for value in obj.values():
+            collect_photo_urls_from_obj(value, found, seen)
+        return
+
+    if isinstance(obj, list):
+        for value in obj:
+            collect_photo_urls_from_obj(value, found, seen)
+        return
+
+    if isinstance(obj, str) and "muscdn.com" in obj and "~noop.webp" in obj:
+        normalized = obj.replace("http://", "https://")
+        if normalized not in seen:
+            seen.add(normalized)
+            found.append(normalized)
+
+
+def extract_tiktok_photo_post(url: str) -> tuple[list[str], str]:
+    html = fetch_html(url)
+    script_match = re.search(
+        r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">(.*?)</script>',
+        html,
+    )
+    if not script_match:
+        raise RuntimeError("No se pudo leer el contenido de la publicación de fotos.")
+
+    data = json.loads(script_match.group(1))
+    root = data.get("__DEFAULT_SCOPE__", {})
+    photo_urls: list[str] = []
+    collect_photo_urls_from_obj(root, photo_urls, set())
+
+    if not photo_urls:
+        raise RuntimeError("No encontré fotos disponibles en esa publicación.")
+
+    title_match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    title = "Post de fotos de TikTok"
+    if title_match:
+        title = re.sub(r"\s+", " ", title_match.group(1)).strip()[:1000] or title
+
+    return photo_urls, title
 
 
 def sanitize_filename(value: str) -> str:
@@ -248,6 +304,8 @@ def download_with_retry(url: str) -> tuple[Path, str, Path]:
 
 def classify_download_error(exc: Exception) -> str:
     message = str(exc).lower()
+    if "unsupported url" in message and "/photo/" in message:
+        return "Ese enlace corresponde a una publicación de fotos de TikTok. Ahora mismo el bot está preparado para videos y reels, no para posts tipo photo."
     if "private" in message or "status code 10204" in message:
         return "Ese video parece privado o no está disponible públicamente."
     if "login" in message or "sign in" in message:
@@ -486,7 +544,12 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         )
         return
 
+    if is_tiktok_photo_url(url):
+        await process_tiktok_photo_post(update, context, url, user_id)
+        return
+
     platform_name = detect_platform(url)
+
     stats["total_requests"] += 1
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO)
     status = await update.message.reply_text(
@@ -615,6 +678,103 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
                 shutil.rmtree(file_path.parent, ignore_errors=True)
             except OSError:
                 logger.warning("No se pudo limpiar el archivo temporal %s", file_path)
+
+
+async def process_tiktok_photo_post(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+    user_id: int,
+) -> None:
+    if not update.message:
+        return
+
+    platform_name = "TikTok Photo"
+    stats["total_requests"] += 1
+    status = await update.message.reply_text(
+        build_progress_text(platform_name, "analyzing"),
+        parse_mode="HTML",
+    )
+
+    try:
+        await status.edit_text(
+            build_progress_text(platform_name, "downloading", "galeria de fotos"),
+            parse_mode="HTML",
+        )
+        photo_urls, title = await asyncio.to_thread(extract_tiktok_photo_post, url)
+    except Exception as exc:
+        logger.exception("No se pudo extraer la publicación de fotos")
+        stats["failed_downloads"] += 1
+        write_history(
+            {
+                "timestamp": int(time.time()),
+                "user_id": user_id,
+                "url": url,
+                "status": "photo_extract_failed",
+                "error": str(exc),
+            }
+        )
+        await status.edit_text(
+            f"◆ <b>No fue posible leer la publicación de fotos</b>\n\n{str(exc)}",
+            parse_mode="HTML",
+            reply_markup=build_post_download_menu(),
+        )
+        return
+
+    await status.edit_text(
+        build_progress_text(platform_name, "sending", "galeria de fotos"),
+        parse_mode="HTML",
+    )
+
+    try:
+        chunks = [photo_urls[i:i + 10] for i in range(0, len(photo_urls), 10)]
+        for chunk_index, chunk in enumerate(chunks):
+            media_group = []
+            for idx, photo_url in enumerate(chunk):
+                caption = None
+                if chunk_index == 0 and idx == 0:
+                    caption = title[:1000]
+                media_group.append(InputMediaPhoto(media=photo_url, caption=caption))
+            await update.message.reply_media_group(media=media_group)
+
+        stats["successful_downloads"] += 1
+        write_history(
+            {
+                "timestamp": int(time.time()),
+                "user_id": user_id,
+                "url": url,
+                "status": "sent_photo_post",
+                "source": "photo_post",
+                "photo_count": len(photo_urls),
+            }
+        )
+        await status.edit_text(
+            "━━━━ <b>Entrega completada</b> ━━━━\n\n"
+            f"• Plataforma: <b>{platform_name}</b>\n"
+            "• Origen: <b>publicación de fotos</b>\n"
+            f"• Total de imágenes: <b>{len(photo_urls)}</b>\n"
+            "• Estado: <b>entregado</b>",
+            parse_mode="HTML",
+            reply_markup=build_post_download_menu(),
+        )
+    except Exception as exc:
+        logger.exception("No se pudo enviar la galería de fotos")
+        stats["failed_downloads"] += 1
+        write_history(
+            {
+                "timestamp": int(time.time()),
+                "user_id": user_id,
+                "url": url,
+                "status": "photo_send_failed",
+                "error": str(exc),
+            }
+        )
+        await status.edit_text(
+            "◆ <b>La publicación fue detectada, pero no pude entregarla</b>\n\n"
+            "Telegram rechazó el envío de la galería o la fuente no respondió como se esperaba.",
+            parse_mode="HTML",
+            reply_markup=build_post_download_menu(),
+        )
 
 
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
