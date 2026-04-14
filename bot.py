@@ -282,7 +282,7 @@ def format_timestamp(timestamp: object) -> str:
 
 def build_main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [["Descargar", "Ayuda"], ["Estado", "Menu"]],
+        [["Nueva entrega", "Asistencia"], ["Estado del servicio", "Centro"]],
         resize_keyboard=True,
         input_field_placeholder="Pega un link o usa un botón",
     )
@@ -291,16 +291,16 @@ def build_main_keyboard() -> ReplyKeyboardMarkup:
 def build_inline_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [
-            InlineKeyboardButton("Descargar", callback_data="menu_download"),
-            InlineKeyboardButton("Ayuda", callback_data="menu_help"),
+            InlineKeyboardButton("Nueva entrega", callback_data="menu_download"),
+            InlineKeyboardButton("Asistencia", callback_data="menu_help"),
         ],
         [
-            InlineKeyboardButton("Estado", callback_data="menu_status"),
-            InlineKeyboardButton("Menu", callback_data="menu_home"),
+            InlineKeyboardButton("Estado del servicio", callback_data="menu_status"),
+            InlineKeyboardButton("Centro", callback_data="menu_home"),
         ],
     ]
     if is_admin:
-        rows.append([InlineKeyboardButton("Panel Admin", callback_data="menu_admin")])
+        rows.append([InlineKeyboardButton("Panel ejecutivo", callback_data="menu_admin")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -308,12 +308,12 @@ def build_post_download_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Descargar otro", callback_data="menu_download"),
-                InlineKeyboardButton("Ver estado", callback_data="menu_status"),
+                InlineKeyboardButton("Nueva entrega", callback_data="menu_download"),
+                InlineKeyboardButton("Estado del servicio", callback_data="menu_status"),
             ],
             [
-                InlineKeyboardButton("Ayuda", callback_data="menu_help"),
-                InlineKeyboardButton("Menu", callback_data="menu_home"),
+                InlineKeyboardButton("Asistencia", callback_data="menu_help"),
+                InlineKeyboardButton("Centro", callback_data="menu_home"),
             ],
         ]
     )
@@ -329,25 +329,24 @@ def is_admin_user(application: Application, user_id: int | None) -> bool:
 def build_welcome_text(first_name: str | None) -> str:
     greeting_name = first_name or "bro"
     return (
-        f"<b>TikSaveBot</b>\n"
-        f"Hola, {greeting_name}.\n\n"
-        f"Estoy online para descargar videos de <b>TikTok</b> e <b>Instagram Reels</b>.\n"
-        f"Solo pega el link y yo me encargo del resto.\n\n"
-        f"<b>Lo que hago:</b>\n"
-        f"- Descarga rapida\n"
-        f"- Cache para enlaces repetidos\n"
-        f"- Reintento automatico si falla\n"
-        f"- Envio como video o archivo si hace falta"
+        f"━━━━ <b>TikSaveBot</b> ━━━━\n"
+        f"Bienvenido, <b>{greeting_name}</b>.\n\n"
+        f"Tu asistente para descargar videos de <b>TikTok</b> e <b>Instagram Reels</b> con una experiencia rápida y cuidada.\n\n"
+        f"<b>Servicios disponibles</b>\n"
+        f"• Descarga de video optimizada\n"
+        f"• Cache inteligente para enlaces repetidos\n"
+        f"• Reintento automático ante fallos temporales\n"
+        f"• Entrega como video o archivo según disponibilidad"
     )
 
 
 def build_help_text() -> str:
     return (
-        "<b>Como usar TikSaveBot</b>\n\n"
-        "1. Toca <b>Descargar</b> o pega tu link directo.\n"
-        "2. Espera unos segundos.\n"
-        "3. Recibe el video en el chat.\n\n"
-        "<b>Comandos:</b>\n"
+        "━━━━ <b>Asistencia</b> ━━━━\n\n"
+        "1. Selecciona <b>Descargar</b> o pega tu enlace directo.\n"
+        "2. Espera unos segundos mientras proceso tu solicitud.\n"
+        "3. Recibe el resultado en este mismo chat.\n\n"
+        "<b>Comandos principales</b>\n"
         "/start\n"
         "/help\n"
         "/descargar LINK\n"
@@ -359,31 +358,73 @@ def build_help_text() -> str:
 def build_status_text() -> str:
     uptime = format_uptime(int(time.time() - stats["started_at"]))
     return (
-        "<b>Estado del bot</b>\n\n"
-        f"Online: si\n"
-        f"Uptime: {uptime}\n"
-        f"Solicitudes: {stats['total_requests']}\n"
-        f"Exitosas: {stats['successful_downloads']}\n"
-        f"Cache hits: {stats['cache_hits']}"
+        "━━━━ <b>Estado del servicio</b> ━━━━\n\n"
+        f"• Disponibilidad: <b>online</b>\n"
+        f"• Tiempo activo: <b>{uptime}</b>\n"
+        f"• Solicitudes procesadas: <b>{stats['total_requests']}</b>\n"
+        f"• Entregas exitosas: <b>{stats['successful_downloads']}</b>\n"
+        f"• Cache hits: <b>{stats['cache_hits']}</b>"
     )
 
 
 def build_success_text(platform_name: str, source_label: str, saved_file: Path, file_size: str) -> str:
     return (
-        f"<b>{platform_name} listo</b>\n\n"
-        f"Fuente: <b>{source_label}</b>\n"
-        f"Tamaño: <b>{file_size}</b>\n"
-        f"Guardado en:\n<code>{saved_file}</code>"
+        f"━━━━ <b>Entrega completada</b> ━━━━\n\n"
+        f"• Plataforma: <b>{platform_name}</b>\n"
+        f"• Origen: <b>{source_label}</b>\n"
+        f"• Tamaño: <b>{file_size}</b>\n"
+        f"• Estado: <b>entregado</b>\n"
+        f"• Archivo:\n<code>{saved_file}</code>"
     )
 
 
 def build_document_success_text(platform_name: str, source_label: str, saved_file: Path, file_size: str) -> str:
     return (
-        f"<b>{platform_name} listo</b>\n\n"
-        f"Telegram no aceptó el MP4 como video, así que te lo mandé como archivo.\n"
-        f"Fuente: <b>{source_label}</b>\n"
-        f"Tamaño: <b>{file_size}</b>\n"
-        f"Guardado en:\n<code>{saved_file}</code>"
+        f"━━━━ <b>Entrega completada</b> ━━━━\n\n"
+        f"• Plataforma: <b>{platform_name}</b>\n"
+        f"• Origen: <b>{source_label}</b>\n"
+        f"• Tamaño: <b>{file_size}</b>\n"
+        f"• Estado: <b>enviado como archivo</b>\n"
+        f"Telegram no aceptó el MP4 como video, por lo que fue enviado como archivo.\n"
+        f"• Archivo:\n<code>{saved_file}</code>"
+    )
+
+
+def build_progress_text(platform_name: str, stage: str, source_label: str | None = None) -> str:
+    steps = {
+        "analyzing": (
+            "◇",
+            "Analizando enlace",
+            "● ○ ○",
+            "Revisando la solicitud y detectando la plataforma..."
+        ),
+        "downloading": (
+            "◇",
+            "Preparando descarga",
+            "● ● ○",
+            "Obteniendo la mejor versión disponible del archivo..."
+        ),
+        "cached": (
+            "◇",
+            "Recuperando desde cache",
+            "● ● ○",
+            "Se encontró una copia local disponible para entrega inmediata..."
+        ),
+        "sending": (
+            "◇",
+            "Entregando archivo",
+            "● ● ●",
+            "Finalizando el proceso y enviando el resultado al chat..."
+        ),
+    }
+    icon, title, bar, subtitle = steps[stage]
+    extra = f"\nFuente detectada: <b>{source_label}</b>" if source_label else ""
+    return (
+        f"━━━━ <b>Entrega en proceso</b> ━━━━\n\n"
+        f"{icon} <b>{platform_name} detectado</b>\n"
+        f"<b>{title}</b>\n"
+        f"<code>{bar}</code>\n"
+        f"{subtitle}{extra}"
     )
 
 
@@ -397,7 +438,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=build_main_keyboard(),
     )
     await update.message.reply_text(
-        "Elige una accion rapida:",
+        "Centro de control:",
         reply_markup=build_inline_menu(is_admin_user(context.application, update.effective_user.id if update.effective_user else None)),
     )
 
@@ -423,24 +464,34 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
     limited, retry_after = is_rate_limited(user_id)
     if limited:
         await update.message.reply_text(
-            f"Vas muy rápido. Espera {retry_after} segundos y prueba otra vez."
+            f"◆ <b>Límite temporal alcanzado</b>\n\nEspera <b>{retry_after}</b> segundos antes de realizar una nueva solicitud.",
+            parse_mode="HTML",
         )
         return
 
     url = extract_url(text)
     if not url:
-        await update.message.reply_text("No encontré un enlace válido en tu mensaje.")
+        await update.message.reply_text(
+            "◆ <b>Enlace no detectado</b>\n\nPega un enlace directo de TikTok o Instagram Reel para continuar.",
+            parse_mode="HTML",
+            reply_markup=build_inline_menu(is_admin_user(context.application, update.effective_user.id if update.effective_user else None)),
+        )
         return
 
     if not is_supported_url(url):
-        await update.message.reply_text("Por ahora este bot acepta enlaces de TikTok e Instagram Reels.")
+        await update.message.reply_text(
+            "◆ <b>Formato no compatible</b>\n\nActualmente este bot acepta enlaces de <b>TikTok</b> e <b>Instagram Reels</b>.",
+            parse_mode="HTML",
+            reply_markup=build_inline_menu(is_admin_user(context.application, update.effective_user.id if update.effective_user else None)),
+        )
         return
 
     platform_name = detect_platform(url)
     stats["total_requests"] += 1
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO)
     status = await update.message.reply_text(
-        f"{platform_name} detectado.\nAnalizando link..."
+        build_progress_text(platform_name, "analyzing"),
+        parse_mode="HTML",
     )
 
     cached_result = get_cached_file(url)
@@ -452,11 +503,13 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             stats["cache_hits"] += 1
             source_label = "cache"
             await status.edit_text(
-                f"{platform_name} detectado.\nAnalizando link...\nDescargando video...\nCache encontrada."
+                build_progress_text(platform_name, "cached", source_label),
+                parse_mode="HTML",
             )
         else:
             await status.edit_text(
-                f"{platform_name} detectado.\nAnalizando link...\nDescargando video..."
+                build_progress_text(platform_name, "downloading", source_label),
+                parse_mode="HTML",
             )
             file_path, title, saved_file = await asyncio.to_thread(download_with_retry, url)
             update_cache(url, title, saved_file)
@@ -472,12 +525,17 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
                 "error": str(exc),
             }
         )
-        await status.edit_text(classify_download_error(exc))
+        await status.edit_text(
+            f"◆ <b>No fue posible completar la descarga</b>\n\n{classify_download_error(exc)}",
+            parse_mode="HTML",
+            reply_markup=build_post_download_menu(),
+        )
         return
 
     file_size = format_file_size(file_path.stat().st_size)
     await status.edit_text(
-        f"{platform_name} detectado.\nAnalizando link...\nDescargando video...\nEnviando archivo..."
+        build_progress_text(platform_name, "sending", source_label),
+        parse_mode="HTML",
     )
     try:
         with file_path.open("rb") as video_file:
@@ -543,9 +601,11 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
                 }
             )
             await status.edit_text(
-                f"Pude descargar el video y quedó guardado en:\n{saved_file}\n"
-                f"Tamaño: {file_size}\n"
-                "Pero Telegram rechazó el envío. Revisa los logs de Railway para ver si fue límite de tamaño, timeout o error temporal.",
+                f"◆ <b>Descarga completada, entrega pendiente</b>\n\n"
+                f"El archivo fue guardado correctamente en:\n<code>{saved_file}</code>\n"
+                f"Tamaño del archivo: <b>{file_size}</b>\n\n"
+                "Telegram rechazó el envío. Revisa los logs de Railway para confirmar si fue un límite de tamaño, timeout o un fallo temporal.",
+                parse_mode="HTML",
                 reply_markup=build_post_download_menu(),
             )
     finally:
@@ -592,13 +652,14 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     uptime = format_uptime(int(time.time() - stats["started_at"]))
     active_users = len(user_requests)
     await update.message.reply_text(
-        "Estadísticas del bot:\n"
-        f"- uptime: {uptime}\n"
-        f"- solicitudes totales: {stats['total_requests']}\n"
-        f"- descargas exitosas: {stats['successful_downloads']}\n"
-        f"- descargas fallidas: {stats['failed_downloads']}\n"
-        f"- aciertos de cache: {stats['cache_hits']}\n"
-        f"- usuarios registrados en memoria: {active_users}"
+        "━━━━ <b>Resumen del servicio</b> ━━━━\n\n"
+        f"• Tiempo activo: <b>{uptime}</b>\n"
+        f"• Solicitudes totales: <b>{stats['total_requests']}</b>\n"
+        f"• Entregas exitosas: <b>{stats['successful_downloads']}</b>\n"
+        f"• Entregas fallidas: <b>{stats['failed_downloads']}</b>\n"
+        f"• Cache hits: <b>{stats['cache_hits']}</b>\n"
+        f"• Usuarios en memoria: <b>{active_users}</b>",
+        parse_mode="HTML",
     )
 
 
@@ -613,16 +674,19 @@ async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     entries = read_history(limit=5)
     if not entries:
-        await update.message.reply_text("Todavía no hay historial guardado.")
+        await update.message.reply_text("━━━━ <b>Actividad reciente</b> ━━━━\n\nAún no hay historial disponible.", parse_mode="HTML")
         return
 
-    lines = ["Últimas descargas:"]
+    lines = ["━━━━ <b>Actividad reciente</b> ━━━━", ""]
     for entry in reversed(entries):
         lines.append(
-            f"- {format_timestamp(entry.get('timestamp'))} | {entry.get('status')} | {entry.get('source', 'sin fuente')} | {entry.get('url', 'sin url')}"
+            f"• <b>{format_timestamp(entry.get('timestamp'))}</b>\n"
+            f"Estado: {entry.get('status')}\n"
+            f"Origen: {entry.get('source', 'sin fuente')}\n"
+            f"URL: {entry.get('url', 'sin url')}"
         )
 
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n\n".join(lines), parse_mode="HTML")
 
 
 async def errors_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -636,17 +700,19 @@ async def errors_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     entries = read_history(limit=5, statuses={"download_failed", "send_failed"})
     if not entries:
-        await update.message.reply_text("No hay errores recientes en el historial.")
+        await update.message.reply_text("━━━━ <b>Incidencias</b> ━━━━\n\nNo hay incidencias recientes en el historial.", parse_mode="HTML")
         return
 
-    lines = ["Últimos errores:"]
+    lines = ["━━━━ <b>Incidencias</b> ━━━━", ""]
     for entry in reversed(entries):
         error_text = str(entry.get("error", "sin detalle"))
         lines.append(
-            f"- {format_timestamp(entry.get('timestamp'))} | {entry.get('status')} | {error_text[:120]}"
+            f"• <b>{format_timestamp(entry.get('timestamp'))}</b>\n"
+            f"Tipo: {entry.get('status')}\n"
+            f"Detalle: {error_text[:120]}"
         )
 
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n\n".join(lines), parse_mode="HTML")
 
 
 async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -660,7 +726,7 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     entries = read_history(limit=200)
     if not entries:
-        await update.message.reply_text("Todavía no hay suficiente historial para calcular top.")
+        await update.message.reply_text("━━━━ <b>Rendimiento</b> ━━━━\n\nAún no hay suficiente historial para generar métricas.", parse_mode="HTML")
         return
 
     url_counter: Counter[str] = Counter()
@@ -678,18 +744,18 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     top_urls = url_counter.most_common(3)
     top_users = user_counter.most_common(3)
 
-    lines = ["Top reciente del bot:"]
+    lines = ["━━━━ <b>Rendimiento</b> ━━━━", ""]
     if top_urls:
-        lines.append("Links más repetidos:")
+        lines.append("<b>Enlaces más recurrentes</b>")
         for url, count in top_urls:
-            lines.append(f"- {count}x | {url}")
+            lines.append(f"• <b>{count}x</b> | {url}")
 
     if top_users:
-        lines.append("Usuarios más activos:")
+        lines.append("<b>Usuarios con mayor actividad</b>")
         for user_id, count in top_users:
-            lines.append(f"- {count} solicitudes | user_id {user_id}")
+            lines.append(f"• <b>{count}</b> solicitudes | user_id {user_id}")
 
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -697,7 +763,8 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     await update.message.reply_text(
-        "Menu principal de TikSaveBot:",
+        "━━━━ <b>Centro de control</b> ━━━━",
+        parse_mode="HTML",
         reply_markup=build_inline_menu(is_admin_user(context.application, update.effective_user.id if update.effective_user else None)),
     )
 
@@ -712,7 +779,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if query.data == "menu_download":
         await query.message.reply_text(
-            "Pega aqui tu link de TikTok o Instagram Reel y lo proceso.",
+            "Comparte tu enlace de TikTok o Instagram Reel para iniciar una nueva entrega.",
             reply_markup=build_main_keyboard(),
         )
         return
@@ -730,7 +797,11 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await query.message.reply_text("Ese panel es solo para admin.")
             return
         await query.message.reply_text(
-            "<b>Panel Admin</b>\n\nUsa:\n/stats\n/last\n/errors\n/top",
+            "━━━━ <b>Panel ejecutivo</b> ━━━━\n\n"
+            "• <b>Resumen del servicio</b>: /stats\n"
+            "• <b>Actividad reciente</b>: /last\n"
+            "• <b>Incidencias</b>: /errors\n"
+            "• <b>Rendimiento</b>: /top",
             parse_mode="HTML",
             reply_markup=build_inline_menu(admin),
         )
@@ -749,15 +820,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     lowered = update.message.text.strip().lower()
     if lowered == "descargar":
-        await update.message.reply_text("Pega tu link de TikTok o Instagram Reel y lo descargo.")
+        await update.message.reply_text(
+            "━━━━ <b>Nueva entrega</b> ━━━━\n\nComparte tu enlace de TikTok o Instagram Reel para comenzar.",
+            parse_mode="HTML",
+            reply_markup=build_main_keyboard(),
+        )
+        return
+    if lowered == "nueva entrega":
+        await update.message.reply_text(
+            "━━━━ <b>Nueva entrega</b> ━━━━\n\nComparte tu enlace de TikTok o Instagram Reel para comenzar.",
+            parse_mode="HTML",
+            reply_markup=build_main_keyboard(),
+        )
         return
     if lowered == "ayuda":
+        await help_command(update, context)
+        return
+    if lowered == "asistencia":
         await help_command(update, context)
         return
     if lowered == "estado":
         await status_command(update, context)
         return
+    if lowered == "estado del servicio":
+        await status_command(update, context)
+        return
     if lowered == "menu":
+        await menu_command(update, context)
+        return
+    if lowered == "centro":
         await menu_command(update, context)
         return
 
@@ -768,14 +859,14 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(
         [
             BotCommand("start", "Inicia TikSaveBot"),
-            BotCommand("help", "Muestra la ayuda"),
-            BotCommand("descargar", "Descarga un link"),
-            BotCommand("estado", "Muestra si el bot está online"),
-            BotCommand("menu", "Abre el menu rapido"),
-            BotCommand("stats", "Estadisticas admin"),
-            BotCommand("last", "Ultimas descargas admin"),
-            BotCommand("errors", "Ultimos errores admin"),
-            BotCommand("top", "Top reciente admin"),
+            BotCommand("help", "Asistencia"),
+            BotCommand("descargar", "Nueva entrega"),
+            BotCommand("estado", "Estado del servicio"),
+            BotCommand("menu", "Centro de control"),
+            BotCommand("stats", "Resumen del servicio"),
+            BotCommand("last", "Actividad reciente"),
+            BotCommand("errors", "Incidencias"),
+            BotCommand("top", "Rendimiento"),
         ]
     )
 
