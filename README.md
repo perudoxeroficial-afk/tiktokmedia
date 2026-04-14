@@ -1,6 +1,6 @@
-# Bot de Telegram para TikTok e Instagram Reels
+# TikSaveBot
 
-Este proyecto crea un bot de Telegram que recibe enlaces de TikTok e Instagram Reels e intenta descargar el video en la mejor calidad disponible usando `yt-dlp`.
+TikSaveBot es un bot de Telegram pensado para descargar videos de TikTok e Instagram Reels con una experiencia más cuidada, rápida y visual dentro del chat. Usa `yt-dlp` para obtener la mejor versión disponible y añade cache, historial, panel admin y una interfaz conversacional más pulida.
 
 ## 1. Instalar dependencias
 
@@ -13,6 +13,12 @@ pip install -r requirements.txt
 1. Abre `@BotFather` en Telegram.
 2. Usa el comando `/newbot`.
 3. Copia el token que te entregue.
+
+Textos recomendados para BotFather:
+
+- Nombre: `TikSaveBot`
+- Descripción: `Descarga videos de TikTok e Instagram Reels con una experiencia rápida, limpia y premium.`
+- About: `Asistente de Telegram para descargar videos desde TikTok e Instagram Reels con cache inteligente, seguimiento de actividad y comandos de administración.`
 
 ## 3. Configurar el token
 
@@ -56,7 +62,15 @@ En tu chat con el bot:
 - `/errors` muestra los últimos errores guardados si eres admin
 - `/top` muestra links y usuarios más activos si eres admin
 
-## Notas
+## 7. Experiencia
+
+- interfaz con botones rápidos e inline
+- mensajes con estilo premium dentro del chat
+- progreso visual por etapas durante la descarga
+- detección automática de plataforma
+- acciones rápidas después de cada entrega
+
+## 8. Notas
 
 - `yt-dlp` intenta obtener la mejor versión disponible del video.
 - Algunos videos privados, restringidos o protegidos pueden fallar.
