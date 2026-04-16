@@ -483,6 +483,10 @@ def format_uptime(seconds: int) -> str:
     return f"{hours}h {minutes}m {secs}s"
 
 
+def ffmpeg_available() -> bool:
+    return shutil.which("ffmpeg") is not None
+
+
 def format_file_size(num_bytes: int) -> str:
     size = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB"):
@@ -577,10 +581,12 @@ def build_help_text() -> str:
 
 def build_status_text() -> str:
     uptime = format_uptime(int(time.time() - stats["started_at"]))
+    ffmpeg_status = "disponible" if ffmpeg_available() else "no disponible"
     return (
         "━━━━ <b>Estado del servicio</b> ━━━━\n\n"
         f"• Disponibilidad: <b>online</b>\n"
         f"• Tiempo activo: <b>{uptime}</b>\n"
+        f"• FFmpeg: <b>{ffmpeg_status}</b>\n"
         f"• Solicitudes procesadas: <b>{stats['total_requests']}</b>\n"
         f"• Entregas exitosas: <b>{stats['successful_downloads']}</b>\n"
         f"• Cache hits: <b>{stats['cache_hits']}</b>"
@@ -1026,7 +1032,8 @@ async def process_tiktok_photo_post(
                         )
                         await status.edit_text(
                             "◆ <b>No fue posible completar la publicacion de fotos</b>\n\n"
-                            "La conversion a video no estuvo disponible y Telegram tampoco aceptó la vista previa rapida.",
+                            "La conversion a video no estuvo disponible y tampoco pude entregar una vista previa util.\n\n"
+                            f"Detalle tecnico: <code>{str(preview_exc)[:180]}</code>",
                             parse_mode="HTML",
                             reply_markup=build_post_download_menu(),
                         )
