@@ -81,5 +81,5 @@ En tu chat con el bot:
 - El bot guarda historial en `data/download_history.jsonl`.
 - El bot reutiliza descargas repetidas desde `data/cache_index.json` cuando el archivo local sigue existiendo.
 - Las descargas nuevas hacen un reintento automático si falla el primer intento.
-- Railway instalará `ffmpeg` desde `nixpacks.toml` para convertir publicaciones `photo` de TikTok en video.
+- Si tu servicio usa Railpack, `railpack.json` instala `ffmpeg` para convertir publicaciones `photo` de TikTok en video.
 - Usa esto solo con contenido que tengas derecho a descargar y reutilizar.
