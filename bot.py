@@ -41,6 +41,9 @@ HISTORY_FILE = DATA_DIR / "download_history.jsonl"
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX_REQUESTS = 5
 DOWNLOAD_RETRIES = 2
+PHOTO_GALLERY_MAX_IMAGES = 8
+PHOTO_GALLERY_DOWNLOAD_TIMEOUT = 45
+PHOTO_GALLERY_SEND_TIMEOUT = 30
 
 user_requests: dict[int, deque[float]] = defaultdict(deque)
 stats = {
@@ -145,14 +148,14 @@ def collect_audio_urls_from_obj(obj: object, found: list[str], seen: set[str]) -
 
 def download_binary_file(url: str, destination: Path) -> None:
     request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urlopen(request, timeout=30) as response, destination.open("wb") as output_file:
+    with urlopen(request, timeout=12) as response, destination.open("wb") as output_file:
         shutil.copyfileobj(response, output_file)
 
 
 def download_photo_gallery(photo_urls: list[str]) -> tuple[list[Path], Path]:
     temp_dir = Path(tempfile.mkdtemp(prefix="tiktok_photo_gallery_"))
     image_paths: list[Path] = []
-    for index, photo_url in enumerate(photo_urls, start=1):
+    for index, photo_url in enumerate(photo_urls[:PHOTO_GALLERY_MAX_IMAGES], start=1):
         image_path = temp_dir / f"photo_{index:03d}.webp"
         download_binary_file(photo_url, image_path)
         image_paths.append(image_path)
@@ -901,7 +904,10 @@ async def process_tiktok_photo_post(
                 parse_mode="HTML",
             )
             try:
-                gallery_paths, gallery_dir = await asyncio.to_thread(download_photo_gallery, photo_urls)
+                gallery_paths, gallery_dir = await asyncio.wait_for(
+                    asyncio.to_thread(download_photo_gallery, photo_urls),
+                    timeout=PHOTO_GALLERY_DOWNLOAD_TIMEOUT,
+                )
                 opened_files = []
                 try:
                     chunks = [gallery_paths[i:i + 10] for i in range(0, len(gallery_paths), 10)]
@@ -912,7 +918,10 @@ async def process_tiktok_photo_post(
                             opened_files.append(photo_file)
                             caption = title[:1000] if chunk_index == 0 and idx == 0 else None
                             media_group.append(InputMediaPhoto(media=photo_file, caption=caption))
-                        await update.message.reply_media_group(media=media_group)
+                        await asyncio.wait_for(
+                            update.message.reply_media_group(media=media_group),
+                            timeout=PHOTO_GALLERY_SEND_TIMEOUT,
+                        )
                 finally:
                     for opened_file in opened_files:
                         opened_file.close()
@@ -931,14 +940,33 @@ async def process_tiktok_photo_post(
                     "━━━━ <b>Entrega completada</b> ━━━━\n\n"
                     f"• Plataforma: <b>{platform_name}</b>\n"
                     "• Origen: <b>galeria de respaldo</b>\n"
+                    f"• Imagenes entregadas: <b>{len(gallery_paths)}</b>\n"
                     "• Estado: <b>entregado</b>\n"
                     "• Audio: <b>no disponible para esta publicacion</b>",
                     parse_mode="HTML",
                     reply_markup=build_post_download_menu(),
                 )
                 return
-            except Exception:
+            except Exception as gallery_exc:
                 logger.exception("No se pudo enviar tampoco la galería de respaldo")
+                stats["failed_downloads"] += 1
+                write_history(
+                    {
+                        "timestamp": int(time.time()),
+                        "user_id": user_id,
+                        "url": url,
+                        "status": "photo_gallery_fallback_failed",
+                        "error": str(gallery_exc),
+                    }
+                )
+                await status.edit_text(
+                    "◆ <b>No fue posible completar la publicacion de fotos</b>\n\n"
+                    "La conversion a video no estuvo disponible y la galeria de respaldo tardó demasiado o fue rechazada por Telegram.\n\n"
+                    f"Intento rapido: se procesan hasta <b>{PHOTO_GALLERY_MAX_IMAGES}</b> fotos por entrega.",
+                    parse_mode="HTML",
+                    reply_markup=build_post_download_menu(),
+                )
+                return
 
         stats["failed_downloads"] += 1
         write_history(
