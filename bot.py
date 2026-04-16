@@ -87,6 +87,17 @@ def fetch_html(url: str) -> str:
         return response.read().decode("utf-8", errors="ignore")
 
 
+def resolve_tiktok_url(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if "tiktok.com" not in host:
+        return url
+
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=20) as response:
+        return response.geturl() or url
+
+
 def collect_photo_urls_from_obj(obj: object, found: list[str], seen: set[str]) -> None:
     if isinstance(obj, dict):
         for value in obj.values():
@@ -681,6 +692,13 @@ async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             reply_markup=build_inline_menu(is_admin_user(context.application, update.effective_user.id if update.effective_user else None)),
         )
         return
+
+    original_url = url
+    try:
+        url = await asyncio.to_thread(resolve_tiktok_url, url)
+    except Exception:
+        logger.warning("No se pudo resolver el enlace original, se usará la URL recibida: %s", original_url)
+        url = original_url
 
     if is_tiktok_photo_url(url):
         await process_tiktok_photo_post(update, context, url, user_id)
