@@ -44,6 +44,7 @@ DOWNLOAD_RETRIES = 2
 PHOTO_GALLERY_MAX_IMAGES = 8
 PHOTO_GALLERY_DOWNLOAD_TIMEOUT = 45
 PHOTO_GALLERY_SEND_TIMEOUT = 30
+PHOTO_PREVIEW_SEND_TIMEOUT = 20
 
 user_requests: dict[int, deque[float]] = defaultdict(deque)
 stats = {
@@ -160,6 +161,13 @@ def download_photo_gallery(photo_urls: list[str]) -> tuple[list[Path], Path]:
         download_binary_file(photo_url, image_path)
         image_paths.append(image_path)
     return image_paths, temp_dir
+
+
+def download_single_photo(photo_url: str) -> tuple[Path, Path]:
+    temp_dir = Path(tempfile.mkdtemp(prefix="tiktok_photo_preview_"))
+    image_path = temp_dir / "preview.webp"
+    download_binary_file(photo_url, image_path)
+    return image_path, temp_dir
 
 
 def build_photo_video(
@@ -949,6 +957,69 @@ async def process_tiktok_photo_post(
                 return
             except Exception as gallery_exc:
                 logger.exception("No se pudo enviar tampoco la galería de respaldo")
+                if photo_urls:
+                    try:
+                        preview_path, preview_dir = await asyncio.wait_for(
+                            asyncio.to_thread(download_single_photo, photo_urls[0]),
+                            timeout=PHOTO_GALLERY_DOWNLOAD_TIMEOUT,
+                        )
+                        try:
+                            with preview_path.open("rb") as preview_file:
+                                await asyncio.wait_for(
+                                    update.message.reply_photo(
+                                        photo=preview_file,
+                                        caption=(
+                                            f"{title[:850]}\n\n"
+                                            "Vista previa rapida de la publicacion.\n"
+                                            "Este entorno no pudo entregar el carrusel completo sin ffmpeg."
+                                        ),
+                                    ),
+                                    timeout=PHOTO_PREVIEW_SEND_TIMEOUT,
+                                )
+                        finally:
+                            shutil.rmtree(preview_dir, ignore_errors=True)
+
+                        stats["successful_downloads"] += 1
+                        write_history(
+                            {
+                                "timestamp": int(time.time()),
+                                "user_id": user_id,
+                                "url": url,
+                                "status": "sent_photo_preview_fallback",
+                                "source": "preview_respaldo",
+                                "error": str(gallery_exc),
+                            }
+                        )
+                        await status.edit_text(
+                            "━━━━ <b>Entrega completada</b> ━━━━\n\n"
+                            f"• Plataforma: <b>{platform_name}</b>\n"
+                            "• Origen: <b>vista previa de respaldo</b>\n"
+                            "• Estado: <b>entregado</b>\n"
+                            "• Detalle: <b>se envio la primera foto para evitar cuelgues del servicio</b>",
+                            parse_mode="HTML",
+                            reply_markup=build_post_download_menu(),
+                        )
+                        return
+                    except Exception as preview_exc:
+                        logger.exception("No se pudo enviar tampoco la vista previa de respaldo")
+                        stats["failed_downloads"] += 1
+                        write_history(
+                            {
+                                "timestamp": int(time.time()),
+                                "user_id": user_id,
+                                "url": url,
+                                "status": "photo_gallery_fallback_failed",
+                                "error": str(preview_exc),
+                            }
+                        )
+                        await status.edit_text(
+                            "◆ <b>No fue posible completar la publicacion de fotos</b>\n\n"
+                            "La conversion a video no estuvo disponible y Telegram tampoco aceptó la vista previa rapida.",
+                            parse_mode="HTML",
+                            reply_markup=build_post_download_menu(),
+                        )
+                        return
+
                 stats["failed_downloads"] += 1
                 write_history(
                     {
@@ -961,8 +1032,7 @@ async def process_tiktok_photo_post(
                 )
                 await status.edit_text(
                     "◆ <b>No fue posible completar la publicacion de fotos</b>\n\n"
-                    "La conversion a video no estuvo disponible y la galeria de respaldo tardó demasiado o fue rechazada por Telegram.\n\n"
-                    f"Intento rapido: se procesan hasta <b>{PHOTO_GALLERY_MAX_IMAGES}</b> fotos por entrega.",
+                    "La conversion a video no estuvo disponible y la galeria de respaldo falló.",
                     parse_mode="HTML",
                     reply_markup=build_post_download_menu(),
                 )
