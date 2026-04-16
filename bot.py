@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -46,6 +47,7 @@ PHOTO_GALLERY_DOWNLOAD_TIMEOUT = 45
 PHOTO_GALLERY_SEND_TIMEOUT = 30
 PHOTO_PREVIEW_SEND_TIMEOUT = 20
 PHOTO_CONVERSION_TIMEOUT = 25
+PHOTO_WORKER_TIMEOUT = 120
 
 user_requests: dict[int, deque[float]] = defaultdict(deque)
 stats = {
@@ -447,6 +449,36 @@ def update_cache(url: str, title: str, saved_file: Path, has_audio: bool | None 
     if has_audio is not None:
         cache_index[url]["has_audio"] = has_audio
     save_cache_index()
+
+
+def run_photo_worker(url: str) -> dict[str, object]:
+    worker_path = BASE_DIR / "photo_worker.py"
+    if not worker_path.exists():
+        raise RuntimeError("No se encontró photo_worker.py en el proyecto.")
+
+    result = subprocess.run(
+        [sys.executable, str(worker_path), url],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(BASE_DIR),
+        timeout=PHOTO_WORKER_TIMEOUT,
+    )
+
+    payload = (result.stdout or result.stderr or "").strip()
+    if not payload:
+        raise RuntimeError("El photo worker no devolvió salida.")
+
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"El photo worker devolvió una respuesta inválida: {payload[:300]}") from exc
+
+    if data.get("status") != "ok":
+        raise RuntimeError(str(data.get("error", "El photo worker no pudo procesar la publicación.")))
+
+    return data
 
 
 def download_with_retry(url: str) -> tuple[Path, str, Path]:
@@ -880,10 +912,9 @@ async def process_tiktok_photo_post(
         build_progress_text(platform_name, "analyzing"),
         parse_mode="HTML",
     )
-
     cached_result = get_cached_file(url)
-    source_label = "publicacion convertida"
-    title = "Publicacion de fotos de TikTok"
+    source_label = "photo worker"
+
     try:
         if cached_result:
             saved_file, title, has_audio = cached_result
@@ -896,40 +927,30 @@ async def process_tiktok_photo_post(
             )
         else:
             await status.edit_text(
-                build_progress_text(platform_name, "downloading", "carrusel premium"),
+                build_progress_text(platform_name, "downloading", "photo worker"),
                 parse_mode="HTML",
             )
-            photo_urls, title, audio_url, video_id = await asyncio.wait_for(
-                asyncio.to_thread(extract_tiktok_photo_post, url),
-                timeout=PHOTO_CONVERSION_TIMEOUT,
-            )
-            file_path, saved_file, has_audio = await asyncio.wait_for(
-                asyncio.to_thread(
-                    build_photo_video,
-                    photo_urls,
-                    audio_url,
-                    title,
-                    video_id,
-                ),
-                timeout=PHOTO_CONVERSION_TIMEOUT,
-            )
+            worker_result = await asyncio.to_thread(run_photo_worker, url)
+            saved_file = Path(str(worker_result["saved_file"]))
+            title = str(worker_result.get("title") or saved_file.stem)
+            has_audio = bool(worker_result.get("has_audio"))
+            file_path = saved_file
             update_cache(url, title, saved_file, has_audio)
     except Exception as exc:
-        logger.exception("No se pudo convertir la publicación de fotos en video")
+        logger.exception("No se pudo procesar la publicación photo con el worker")
         stats["failed_downloads"] += 1
         write_history(
             {
                 "timestamp": int(time.time()),
                 "user_id": user_id,
                 "url": url,
-                "status": "photo_conversion_failed",
+                "status": "photo_worker_failed",
                 "error": str(exc),
             }
         )
         await status.edit_text(
             "◆ <b>No fue posible completar la publicacion de fotos</b>\n\n"
-            "TikTok no expuso de forma util los archivos originales del carrusel para este entorno, asi que no pude convertirlo sin que el servicio se quedara colgado.\n\n"
-            f"Detalle tecnico: <code>{str(exc)[:180]}</code>",
+            f"{str(exc)}",
             parse_mode="HTML",
             reply_markup=build_post_download_menu(),
         )
@@ -972,7 +993,7 @@ async def process_tiktok_photo_post(
             reply_markup=build_post_download_menu(),
         )
     except Exception as exc:
-        logger.exception("No se pudo enviar el carrusel convertido como video")
+        logger.exception("No se pudo enviar la publicación photo como video")
         try:
             file_size = format_file_size(file_path.stat().st_size)
             with file_path.open("rb") as document_file:
@@ -1015,18 +1036,11 @@ async def process_tiktok_photo_post(
                 }
             )
             await status.edit_text(
-                "◆ <b>La publicación fue convertida, pero no pude entregarla</b>\n\n"
-                "El carrusel quedó procesado, aunque Telegram rechazó el envío del archivo.",
+                "◆ <b>La publicacion photo fue procesada, pero no pude entregarla</b>\n\n"
+                "Telegram rechazó el archivo generado por el worker.",
                 parse_mode="HTML",
                 reply_markup=build_post_download_menu(),
             )
-    finally:
-        if 'file_path' in locals() and file_path != saved_file:
-            try:
-                file_path.unlink(missing_ok=True)
-                shutil.rmtree(file_path.parent, ignore_errors=True)
-            except OSError:
-                logger.warning("No se pudo limpiar el archivo temporal %s", file_path)
 
 
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

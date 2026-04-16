@@ -83,3 +83,23 @@ En tu chat con el bot:
 - Las descargas nuevas hacen un reintento automático si falla el primer intento.
 - Si tu servicio usa Railpack, `railpack.json` instala `ffmpeg` para convertir publicaciones `photo` de TikTok en video.
 - Usa esto solo con contenido que tengas derecho a descargar y reutilizar.
+
+## 9. Photo Worker
+
+Las publicaciones `photo` de TikTok usan `photo_worker.py`, que obtiene metadata con `@tobyg74/tiktok-api-dl` desde `toby_lab/` y luego arma el MP4 con `ffmpeg`.
+
+Puedes probar el worker aislado así:
+
+```powershell
+python photo_worker.py "https://vt.tiktok.com/..."
+```
+
+Si funciona, el script devolverá un JSON con el archivo generado y lo guardará en `photo_worker_output/`.
+Si falla, devolverá un JSON con el error exacto para investigar esa ruta aparte sin congelar el bot principal.
+
+Dependencias de este laboratorio:
+
+```powershell
+cd toby_lab
+npm install
+```
