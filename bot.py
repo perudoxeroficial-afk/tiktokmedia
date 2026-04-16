@@ -149,6 +149,16 @@ def download_binary_file(url: str, destination: Path) -> None:
         shutil.copyfileobj(response, output_file)
 
 
+def download_photo_gallery(photo_urls: list[str]) -> tuple[list[Path], Path]:
+    temp_dir = Path(tempfile.mkdtemp(prefix="tiktok_photo_gallery_"))
+    image_paths: list[Path] = []
+    for index, photo_url in enumerate(photo_urls, start=1):
+        image_path = temp_dir / f"photo_{index:03d}.webp"
+        download_binary_file(photo_url, image_path)
+        image_paths.append(image_path)
+    return image_paths, temp_dir
+
+
 def build_photo_video(
     photo_urls: list[str],
     audio_url: str | None,
@@ -857,6 +867,8 @@ async def process_tiktok_photo_post(
     source_label = "publicacion convertida"
     photo_urls: list[str] = []
     title = "Publicacion de fotos de TikTok"
+    gallery_dir: Path | None = None
+    gallery_paths: list[Path] = []
     try:
         if cached_result:
             saved_file, title, has_audio = cached_result
@@ -889,13 +901,21 @@ async def process_tiktok_photo_post(
                 parse_mode="HTML",
             )
             try:
-                chunks = [photo_urls[i:i + 10] for i in range(0, len(photo_urls), 10)]
-                for chunk_index, chunk in enumerate(chunks):
-                    media_group = []
-                    for idx, photo_url in enumerate(chunk):
-                        caption = title[:1000] if chunk_index == 0 and idx == 0 else None
-                        media_group.append(InputMediaPhoto(media=photo_url, caption=caption))
-                    await update.message.reply_media_group(media=media_group)
+                gallery_paths, gallery_dir = await asyncio.to_thread(download_photo_gallery, photo_urls)
+                opened_files = []
+                try:
+                    chunks = [gallery_paths[i:i + 10] for i in range(0, len(gallery_paths), 10)]
+                    for chunk_index, chunk in enumerate(chunks):
+                        media_group = []
+                        for idx, photo_path in enumerate(chunk):
+                            photo_file = photo_path.open("rb")
+                            opened_files.append(photo_file)
+                            caption = title[:1000] if chunk_index == 0 and idx == 0 else None
+                            media_group.append(InputMediaPhoto(media=photo_file, caption=caption))
+                        await update.message.reply_media_group(media=media_group)
+                finally:
+                    for opened_file in opened_files:
+                        opened_file.close()
 
                 stats["successful_downloads"] += 1
                 write_history(
@@ -1029,6 +1049,8 @@ async def process_tiktok_photo_post(
                 shutil.rmtree(file_path.parent, ignore_errors=True)
             except OSError:
                 logger.warning("No se pudo limpiar el archivo temporal %s", file_path)
+        if gallery_dir:
+            shutil.rmtree(gallery_dir, ignore_errors=True)
 
 
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
