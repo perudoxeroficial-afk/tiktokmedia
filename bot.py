@@ -964,18 +964,30 @@ async def process_tiktok_photo_post(
                             timeout=PHOTO_GALLERY_DOWNLOAD_TIMEOUT,
                         )
                         try:
-                            with preview_path.open("rb") as preview_file:
-                                await asyncio.wait_for(
-                                    update.message.reply_photo(
-                                        photo=preview_file,
-                                        caption=(
-                                            f"{title[:850]}\n\n"
-                                            "Vista previa rapida de la publicacion.\n"
-                                            "Este entorno no pudo entregar el carrusel completo sin ffmpeg."
+                            preview_caption = (
+                                f"{title[:850]}\n\n"
+                                "Vista previa rapida de la publicacion.\n"
+                                "Este entorno no pudo entregar el carrusel completo sin ffmpeg."
+                            )
+                            try:
+                                with preview_path.open("rb") as preview_file:
+                                    await asyncio.wait_for(
+                                        update.message.reply_photo(
+                                            photo=preview_file,
+                                            caption=preview_caption,
                                         ),
-                                    ),
-                                    timeout=PHOTO_PREVIEW_SEND_TIMEOUT,
-                                )
+                                        timeout=PHOTO_PREVIEW_SEND_TIMEOUT,
+                                    )
+                            except Exception:
+                                logger.exception("No se pudo enviar la vista previa como foto, se intentará como archivo")
+                                with preview_path.open("rb") as preview_file:
+                                    await asyncio.wait_for(
+                                        update.message.reply_document(
+                                            document=preview_file,
+                                            caption=preview_caption,
+                                        ),
+                                        timeout=PHOTO_PREVIEW_SEND_TIMEOUT,
+                                    )
                         finally:
                             shutil.rmtree(preview_dir, ignore_errors=True)
 
