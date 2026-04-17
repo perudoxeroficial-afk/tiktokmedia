@@ -716,34 +716,65 @@ def infer_media_kind(path: Path, explicit_kind: object = None) -> str:
 
 
 def build_progress_text(platform_name: str, stage: str, source_label: str | None = None) -> str:
-    steps = {
-        "analyzing": (
-            "◇",
-            "Analizando enlace",
-            "● ○ ○",
-            "Revisando la solicitud y detectando la plataforma..."
-        ),
-        "downloading": (
-            "◇",
-            "Preparando descarga",
-            "● ● ○",
-            "Obteniendo la mejor versión disponible del archivo..."
-        ),
-        "cached": (
-            "◇",
-            "Recuperando desde cache",
-            "● ● ○",
-            "Se encontró una copia local disponible para entrega inmediata..."
-        ),
-        "sending": (
-            "◇",
-            "Entregando archivo",
-            "● ● ●",
-            "Finalizando el proceso y enviando el resultado al chat..."
-        ),
-    }
+    if platform_name == "TikTok Photo":
+        steps = {
+            "analyzing": (
+                "◇",
+                "Curando publicacion visual",
+                "● ○ ○",
+                "Leyendo la publicación y preparando la mejor presentación disponible..."
+            ),
+            "downloading": (
+                "◇",
+                "Componiendo entrega visual",
+                "● ● ○",
+                "Procesando las láminas y ajustando el formato más estable para el chat..."
+            ),
+            "cached": (
+                "◇",
+                "Recuperando entrega premium",
+                "● ● ○",
+                "Ya existía una versión lista para entrega inmediata..."
+            ),
+            "sending": (
+                "◇",
+                "Liberando entrega al chat",
+                "● ● ●",
+                "Aplicando el acabado final y enviando el resultado..."
+            ),
+        }
+        extra_label = "Modo de entrega"
+    else:
+        steps = {
+            "analyzing": (
+                "◇",
+                "Analizando enlace",
+                "● ○ ○",
+                "Revisando la solicitud y detectando la plataforma..."
+            ),
+            "downloading": (
+                "◇",
+                "Preparando descarga",
+                "● ● ○",
+                "Obteniendo la mejor versión disponible del archivo..."
+            ),
+            "cached": (
+                "◇",
+                "Recuperando desde cache",
+                "● ● ○",
+                "Se encontró una copia local disponible para entrega inmediata..."
+            ),
+            "sending": (
+                "◇",
+                "Entregando archivo",
+                "● ● ●",
+                "Finalizando el proceso y enviando el resultado al chat..."
+            ),
+        }
+        extra_label = "Fuente detectada"
+
     icon, title, bar, subtitle = steps[stage]
-    extra = f"\nFuente detectada: <b>{source_label}</b>" if source_label else ""
+    extra = f"\n{extra_label}: <b>{source_label}</b>" if source_label else ""
     return (
         f"━━━━ <b>Entrega en proceso</b> ━━━━\n\n"
         f"{icon} <b>{platform_name} detectado</b>\n"
