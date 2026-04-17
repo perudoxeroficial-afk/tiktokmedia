@@ -70,9 +70,18 @@ def describe_file(path: Path) -> str:
 
 def normalize_image_for_ffmpeg(source_path: Path, destination_base: Path) -> Path:
     with Image.open(source_path) as image:
-        normalized = image.convert("RGBA")
-        output_path = destination_base.with_suffix(".png")
-        normalized.save(output_path, format="PNG")
+        normalized = image.convert("RGB")
+        normalized.thumbnail((1080, 1920), Image.Resampling.LANCZOS)
+
+        canvas = Image.new("RGB", (1080, 1920), "black")
+        offset = (
+            (1080 - normalized.width) // 2,
+            (1920 - normalized.height) // 2,
+        )
+        canvas.paste(normalized, offset)
+
+        output_path = destination_base.with_suffix(".jpg")
+        canvas.save(output_path, format="JPEG", quality=90, optimize=True)
     return output_path
 
 
