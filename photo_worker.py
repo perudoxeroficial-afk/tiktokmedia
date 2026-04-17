@@ -30,6 +30,42 @@ def ensure_worker_dependencies() -> None:
         raise RuntimeError("Faltan dependencias en toby_lab. Ejecuta npm install dentro de esa carpeta.")
 
 
+def detect_binary_extension(data: bytes, content_type: str | None = None) -> tuple[str, str]:
+    lowered = (content_type or "").lower()
+
+    if data.startswith(b"RIFF") and b"WEBP" in data[:16]:
+        return ".webp", "image/webp"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png", "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg", "image/jpeg"
+    if data.startswith(b"ID3") or data[:2] == b"\xff\xfb":
+        return ".mp3", "audio/mpeg"
+    if b"ftyp" in data[:32]:
+        if "audio/mp4" in lowered or "m4a" in lowered:
+            return ".m4a", "audio/mp4"
+        return ".mp4", lowered or "video/mp4"
+    if lowered.startswith("image/"):
+        if "png" in lowered:
+            return ".png", lowered
+        if "jpeg" in lowered or "jpg" in lowered:
+            return ".jpg", lowered
+        if "webp" in lowered:
+            return ".webp", lowered
+    if lowered.startswith("audio/"):
+        if "mpeg" in lowered or "mp3" in lowered:
+            return ".mp3", lowered
+        if "mp4" in lowered or "m4a" in lowered:
+            return ".m4a", lowered
+    return ".bin", lowered or "application/octet-stream"
+
+
+def describe_file(path: Path) -> str:
+    if not path.exists():
+        return f"{path.name}:missing"
+    return f"{path.name}:{path.suffix}:{path.stat().st_size}B"
+
+
 def fetch_photo_metadata(url: str) -> dict[str, object]:
     ensure_worker_dependencies()
     result = subprocess.run(
@@ -65,10 +101,22 @@ def fetch_photo_metadata(url: str) -> dict[str, object]:
     return result_data
 
 
-def download_binary_file(url: str, destination: Path) -> None:
+def download_binary_file(url: str, destination_base: Path) -> Path:
     request = Request(url, headers={"User-Agent": USER_AGENT})
-    with urlopen(request, timeout=20) as response, destination.open("wb") as output_file:
-        shutil.copyfileobj(response, output_file)
+    with urlopen(request, timeout=20) as response:
+        payload = response.read()
+        content_type = response.headers.get("Content-Type")
+
+    suffix, detected_type = detect_binary_extension(payload, content_type)
+    if suffix == ".bin":
+        preview = payload[:120].decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Descarga invalida desde CDN: tipo={detected_type}, bytes={len(payload)}, preview={preview}"
+        )
+
+    destination = destination_base.with_suffix(suffix)
+    destination.write_bytes(payload)
+    return destination
 
 
 def normalize_audio_url(metadata: dict[str, object]) -> str | None:
@@ -86,8 +134,9 @@ def normalize_audio_url(metadata: dict[str, object]) -> str | None:
     return None
 
 
-def summarize_ffmpeg_error(stderr: str) -> str:
-    cleaned_lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+def summarize_ffmpeg_error(stderr: str, stdout: str = "") -> str:
+    combined = "\n".join(part for part in (stderr, stdout) if part)
+    cleaned_lines = [line.strip() for line in combined.splitlines() if line.strip()]
     if not cleaned_lines:
         return "FFmpeg devolvio un error sin detalle."
 
@@ -143,7 +192,7 @@ def run_ffmpeg_for_photo_video(image_paths: list[Path], output_path: Path, audio
     )
 
     result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    return result.returncode == 0, summarize_ffmpeg_error(result.stderr or "")
+    return result.returncode == 0, summarize_ffmpeg_error(result.stderr or "", result.stdout or "")
 
 
 def build_photo_video(metadata: dict[str, object]) -> dict[str, object]:
@@ -164,16 +213,14 @@ def build_photo_video(metadata: dict[str, object]) -> dict[str, object]:
 
     try:
         for index, photo_url in enumerate(photo_urls, start=1):
-            image_path = temp_dir / f"frame_{index:03d}.webp"
-            download_binary_file(str(photo_url), image_path)
+            image_path = download_binary_file(str(photo_url), temp_dir / f"frame_{index:03d}")
             image_paths.append(image_path)
 
         audio_path: Path | None = None
         has_audio = False
         if audio_url:
             try:
-                audio_path = temp_dir / "audio_track.mp3"
-                download_binary_file(audio_url, audio_path)
+                audio_path = download_binary_file(audio_url, temp_dir / "audio_track")
                 has_audio = True
             except Exception:
                 audio_path = None
@@ -186,9 +233,15 @@ def build_photo_video(metadata: dict[str, object]) -> dict[str, object]:
             if success:
                 has_audio = False
             else:
-                raise RuntimeError(f"FFmpeg fallo con audio y sin audio: {retry_error or ffmpeg_error}")
+                raise RuntimeError(
+                    f"FFmpeg fallo con audio y sin audio: {retry_error or ffmpeg_error}. "
+                    f"Entradas: {', '.join(describe_file(path) for path in image_paths)}"
+                )
         elif not success:
-            raise RuntimeError(ffmpeg_error or "FFmpeg devolvio un error.")
+            raise RuntimeError(
+                f"{ffmpeg_error or 'FFmpeg devolvio un error.'} "
+                f"Entradas: {', '.join(describe_file(path) for path in image_paths)}"
+            )
 
         shutil.copy2(output_path, saved_file)
         return {
