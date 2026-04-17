@@ -7,6 +7,8 @@ import tempfile
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from PIL import Image
+
 
 BASE_DIR = Path(__file__).resolve().parent
 PHOTO_WORKER_DIR = BASE_DIR / "photo_worker_output"
@@ -64,6 +66,14 @@ def describe_file(path: Path) -> str:
     if not path.exists():
         return f"{path.name}:missing"
     return f"{path.name}:{path.suffix}:{path.stat().st_size}B"
+
+
+def normalize_image_for_ffmpeg(source_path: Path, destination_base: Path) -> Path:
+    with Image.open(source_path) as image:
+        normalized = image.convert("RGBA")
+        output_path = destination_base.with_suffix(".png")
+        normalized.save(output_path, format="PNG")
+    return output_path
 
 
 def fetch_photo_metadata(url: str) -> dict[str, object]:
@@ -213,7 +223,8 @@ def build_photo_video(metadata: dict[str, object]) -> dict[str, object]:
 
     try:
         for index, photo_url in enumerate(photo_urls, start=1):
-            image_path = download_binary_file(str(photo_url), temp_dir / f"frame_{index:03d}")
+            raw_image_path = download_binary_file(str(photo_url), temp_dir / f"frame_{index:03d}_raw")
+            image_path = normalize_image_for_ffmpeg(raw_image_path, temp_dir / f"frame_{index:03d}")
             image_paths.append(image_path)
 
         audio_path: Path | None = None
