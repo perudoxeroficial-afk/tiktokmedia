@@ -49,6 +49,8 @@ PHOTO_GALLERY_SEND_TIMEOUT = 30
 PHOTO_PREVIEW_SEND_TIMEOUT = 20
 PHOTO_CONVERSION_TIMEOUT = 25
 PHOTO_WORKER_TIMEOUT = 120
+PHOTO_STATIC_MODE_THRESHOLD = 3
+PHOTO_STATIC_MODE_LOOKBACK = 6
 
 user_requests: dict[int, deque[float]] = defaultdict(deque)
 stats = {
@@ -378,6 +380,98 @@ def read_history(limit: int = 10, statuses: set[str] | None = None) -> list[dict
     return entries[-limit:]
 
 
+def get_last_photo_delivery_status() -> str:
+    entries = read_history(
+        limit=20,
+        statuses={
+            "sent_photo_video",
+            "sent_photo_document",
+            "sent_photo_image",
+            "sent_photo_image_document",
+            "photo_worker_failed",
+            "photo_send_failed",
+        },
+    )
+    if not entries:
+        return "<b>sin actividad reciente</b>"
+
+    last_entry = entries[-1]
+    status = str(last_entry.get("status", ""))
+
+    if status == "sent_photo_video":
+        return "<b>video entregado</b>"
+    if status == "sent_photo_document":
+        return "<b>video entregado como archivo</b>"
+    if status == "sent_photo_image":
+        return "<b>vista estática premium</b>"
+    if status == "sent_photo_image_document":
+        return "<b>vista estática como archivo</b>"
+    if status == "photo_worker_failed":
+        return "<b>fallo en composicion</b>"
+    if status == "photo_send_failed":
+        return "<b>fallo en entrega</b>"
+    return "<b>sin datos claros</b>"
+
+
+def get_recent_photo_outcomes(limit: int = PHOTO_STATIC_MODE_LOOKBACK) -> list[str]:
+    entries = read_history(
+        limit=limit,
+        statuses={
+            "sent_photo_video",
+            "sent_photo_document",
+            "sent_photo_image",
+            "sent_photo_image_document",
+            "photo_worker_failed",
+            "photo_send_failed",
+        },
+    )
+    return [str(entry.get("status", "")) for entry in entries]
+
+
+def should_force_photo_static_mode() -> bool:
+    recent_outcomes = get_recent_photo_outcomes()
+    if len(recent_outcomes) < PHOTO_STATIC_MODE_THRESHOLD:
+        return False
+
+    degraded_statuses = {
+        "sent_photo_image",
+        "sent_photo_image_document",
+        "photo_worker_failed",
+        "photo_send_failed",
+    }
+    return all(status in degraded_statuses for status in recent_outcomes[-PHOTO_STATIC_MODE_THRESHOLD:])
+
+
+def get_photo_metrics() -> dict[str, int]:
+    counts = {
+        "video": 0,
+        "image": 0,
+        "failed": 0,
+    }
+    entries = read_history(
+        limit=300,
+        statuses={
+            "sent_photo_video",
+            "sent_photo_document",
+            "sent_photo_image",
+            "sent_photo_image_document",
+            "photo_worker_failed",
+            "photo_send_failed",
+        },
+    )
+
+    for entry in entries:
+        status = str(entry.get("status", ""))
+        if status in {"sent_photo_video", "sent_photo_document"}:
+            counts["video"] += 1
+        elif status in {"sent_photo_image", "sent_photo_image_document"}:
+            counts["image"] += 1
+        elif status in {"photo_worker_failed", "photo_send_failed"}:
+            counts["failed"] += 1
+
+    return counts
+
+
 def is_rate_limited(user_id: int) -> tuple[bool, int]:
     now = time.time()
     requests = user_requests[user_id]
@@ -452,10 +546,14 @@ def update_cache(url: str, title: str, saved_file: Path, has_audio: bool | None 
     save_cache_index()
 
 
-def run_photo_worker(url: str) -> dict[str, object]:
+def run_photo_worker(url: str, force_preview: bool = False) -> dict[str, object]:
     worker_path = BASE_DIR / "photo_worker.py"
     if not worker_path.exists():
         raise RuntimeError("No se encontró photo_worker.py en el proyecto.")
+
+    env = os.environ.copy()
+    if force_preview:
+        env["PHOTO_WORKER_MODE"] = "preview"
 
     result = subprocess.run(
         [sys.executable, str(worker_path), url],
@@ -465,6 +563,7 @@ def run_photo_worker(url: str) -> dict[str, object]:
         errors="replace",
         cwd=str(BASE_DIR),
         timeout=PHOTO_WORKER_TIMEOUT,
+        env=env,
     )
 
     payload = (result.stdout or result.stderr or "").strip()
@@ -519,6 +618,20 @@ def format_uptime(seconds: int) -> str:
 
 def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
+
+
+def is_running_on_railway() -> bool:
+    return any(os.getenv(name) for name in ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID"))
+
+
+def get_photo_mode_status() -> str:
+    if should_force_photo_static_mode():
+        return "temporal: <b>vista estática premium</b>"
+    if is_running_on_railway():
+        return "adaptativo: <b>video si convierte</b> / <b>vista estática premium si no</b>"
+    if ffmpeg_available():
+        return "preferente: <b>video</b>"
+    return "respaldo: <b>vista estática premium</b>"
 
 
 def format_file_size(num_bytes: int) -> str:
@@ -616,11 +729,15 @@ def build_help_text() -> str:
 def build_status_text() -> str:
     uptime = format_uptime(int(time.time() - stats["started_at"]))
     ffmpeg_status = "disponible" if ffmpeg_available() else "no disponible"
+    photo_mode = get_photo_mode_status()
+    last_photo_status = get_last_photo_delivery_status()
     return (
         "━━━━ <b>Estado del servicio</b> ━━━━\n\n"
         f"• Disponibilidad: <b>online</b>\n"
         f"• Tiempo activo: <b>{uptime}</b>\n"
         f"• FFmpeg: <b>{ffmpeg_status}</b>\n"
+        f"• Photo mode: {photo_mode}\n"
+        f"• Ultimo photo: {last_photo_status}\n"
         f"• Solicitudes procesadas: <b>{stats['total_requests']}</b>\n"
         f"• Entregas exitosas: <b>{stats['successful_downloads']}</b>\n"
         f"• Cache hits: <b>{stats['cache_hits']}</b>"
@@ -1003,6 +1120,7 @@ async def process_tiktok_photo_post(
     )
     cached_result = get_cached_file(url)
     source_label = "photo worker"
+    force_preview = should_force_photo_static_mode()
 
     try:
         if cached_result:
@@ -1017,15 +1135,21 @@ async def process_tiktok_photo_post(
             )
         else:
             await status.edit_text(
-                build_progress_text(platform_name, "downloading", "photo worker"),
+                build_progress_text(
+                    platform_name,
+                    "downloading",
+                    "modo visual temporal" if force_preview else "photo worker",
+                ),
                 parse_mode="HTML",
             )
-            worker_result = await asyncio.to_thread(run_photo_worker, url)
+            worker_result = await asyncio.to_thread(run_photo_worker, url, force_preview)
             saved_file = Path(str(worker_result["saved_file"]))
             title = str(worker_result.get("title") or saved_file.stem)
             has_audio = bool(worker_result.get("has_audio"))
             media_kind = infer_media_kind(saved_file, worker_result.get("media_kind"))
             file_path = saved_file
+            if force_preview and media_kind == "image":
+                source_label = "modo visual temporal"
             update_cache(url, title, saved_file, has_audio)
     except Exception as exc:
         logger.exception("No se pudo procesar la publicación photo con el worker")
@@ -1183,6 +1307,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     uptime = format_uptime(int(time.time() - stats["started_at"]))
     active_users = len(user_requests)
+    photo_metrics = get_photo_metrics()
     await update.message.reply_text(
         "━━━━ <b>Resumen del servicio</b> ━━━━\n\n"
         f"• Tiempo activo: <b>{uptime}</b>\n"
@@ -1190,6 +1315,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"• Entregas exitosas: <b>{stats['successful_downloads']}</b>\n"
         f"• Entregas fallidas: <b>{stats['failed_downloads']}</b>\n"
         f"• Cache hits: <b>{stats['cache_hits']}</b>\n"
+        f"• Photo en video: <b>{photo_metrics['video']}</b>\n"
+        f"• Photo en vista estatica: <b>{photo_metrics['image']}</b>\n"
+        f"• Photo con fallo: <b>{photo_metrics['failed']}</b>\n"
         f"• Usuarios en memoria: <b>{active_users}</b>",
         parse_mode="HTML",
     )

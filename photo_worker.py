@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -305,6 +306,10 @@ def build_photo_preview(metadata: dict[str, object], reason: str) -> dict[str, o
 
 def run_photo_job(url: str) -> dict[str, object]:
     metadata = fetch_photo_metadata(url)
+    if os.getenv("PHOTO_WORKER_MODE") == "preview":
+        result = build_photo_preview(metadata, "modo visual temporal activado")
+        result["media_kind"] = "image"
+        return result
     try:
         result = build_photo_video(metadata)
         result["media_kind"] = "video"
