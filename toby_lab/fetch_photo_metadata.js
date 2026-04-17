@@ -1,3 +1,13 @@
+const { Blob, File } = require("node:buffer");
+
+if (typeof globalThis.Blob === "undefined") {
+    globalThis.Blob = Blob;
+}
+
+if (typeof globalThis.File === "undefined") {
+    globalThis.File = File;
+}
+
 const Tiktok = require("@tobyg74/tiktok-api-dl");
 
 async function main() {

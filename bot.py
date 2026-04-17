@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import logging
 import os
@@ -950,7 +951,7 @@ async def process_tiktok_photo_post(
         )
         await status.edit_text(
             "◆ <b>No fue posible completar la publicacion de fotos</b>\n\n"
-            f"{str(exc)}",
+            f"{html.escape(str(exc))}",
             parse_mode="HTML",
             reply_markup=build_post_download_menu(),
         )
