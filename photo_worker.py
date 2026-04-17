@@ -287,17 +287,23 @@ def build_photo_preview(metadata: dict[str, object], reason: str) -> dict[str, o
     temp_dir = Path(tempfile.mkdtemp(prefix="photo_worker_preview_"))
 
     try:
-        raw_image_path = download_binary_file(str(photo_urls[0]), temp_dir / "preview_raw")
-        preview_path = normalize_image_for_ffmpeg(raw_image_path, temp_dir / "preview")
-        saved_file = PHOTO_WORKER_DIR / f"{sanitize_filename(title)}_{video_id}{preview_path.suffix.lower()}"
-        shutil.copy2(preview_path, saved_file)
+        gallery_files: list[str] = []
+        for index, photo_url in enumerate(photo_urls[:10], start=1):
+            raw_image_path = download_binary_file(str(photo_url), temp_dir / f"preview_raw_{index:03d}")
+            preview_path = normalize_image_for_ffmpeg(raw_image_path, temp_dir / f"preview_{index:03d}")
+            saved_file = PHOTO_WORKER_DIR / f"{sanitize_filename(title)}_{video_id}_{index:02d}{preview_path.suffix.lower()}"
+            shutil.copy2(preview_path, saved_file)
+            gallery_files.append(str(saved_file))
+
+        primary_file = gallery_files[0]
         return {
             "status": "ok",
             "title": title,
             "photo_count": len(photo_urls),
             "has_audio": False,
-            "media_kind": "image",
-            "saved_file": str(saved_file),
+            "media_kind": "gallery" if len(gallery_files) > 1 else "image",
+            "saved_file": primary_file,
+            "gallery_files": gallery_files,
             "note": f"Fallback a imagen por limite de conversion: {reason[:200]}",
         }
     finally:

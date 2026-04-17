@@ -752,6 +752,10 @@ def build_success_text(
     media_kind: str = "video",
 ) -> str:
     delivery_note = (
+        "• Presentacion: <b>galeria visual premium</b>\n"
+        "• Nota: <b>entregado en secuencia de imagenes por limites temporales de conversión</b>"
+        if media_kind == "gallery"
+        else
         "• Presentacion: <b>vista estática premium</b>\n"
         "• Nota: <b>entregado en imagen por límites temporales de conversión</b>"
         if media_kind == "image"
@@ -775,6 +779,10 @@ def build_document_success_text(
     media_kind: str = "video",
 ) -> str:
     delivery_note = (
+        "La entrega visual se resolvió como galeria de respaldo para mantener estabilidad.\n"
+        "• Presentacion: <b>galeria visual premium</b>"
+        if media_kind == "gallery"
+        else
         "La entrega visual se resolvió como imagen de respaldo para mantener estabilidad.\n"
         "• Presentacion: <b>vista estática premium</b>"
         if media_kind == "image"
@@ -827,7 +835,7 @@ def build_photo_caption(title: str, media_kind: str, has_audio: bool | None) -> 
 
 
 def infer_media_kind(path: Path, explicit_kind: object = None) -> str:
-    if isinstance(explicit_kind, str) and explicit_kind in {"video", "image"}:
+    if isinstance(explicit_kind, str) and explicit_kind in {"video", "image", "gallery"}:
         return explicit_kind
     return "video" if path.suffix.lower() == ".mp4" else "image"
 
@@ -1127,6 +1135,7 @@ async def process_tiktok_photo_post(
             saved_file, title, has_audio = cached_result
             file_path = saved_file
             media_kind = infer_media_kind(saved_file)
+            gallery_files: list[Path] = []
             source_label = "cache"
             stats["cache_hits"] += 1
             await status.edit_text(
@@ -1148,8 +1157,11 @@ async def process_tiktok_photo_post(
             has_audio = bool(worker_result.get("has_audio"))
             media_kind = infer_media_kind(saved_file, worker_result.get("media_kind"))
             file_path = saved_file
+            gallery_files = [Path(path) for path in worker_result.get("gallery_files", []) if isinstance(path, str)]
             if force_preview and media_kind == "image":
                 source_label = "modo visual temporal"
+            elif force_preview and media_kind == "gallery":
+                source_label = "galeria visual temporal"
             update_cache(url, title, saved_file, has_audio)
     except Exception as exc:
         logger.exception("No se pudo procesar la publicación photo con el worker")
@@ -1187,18 +1199,40 @@ async def process_tiktok_photo_post(
                     supports_streaming=True,
                 )
         else:
-            with file_path.open("rb") as image_file:
-                await update.message.reply_photo(
-                    photo=image_file,
-                    caption=caption_text,
-                )
+            if media_kind == "gallery" and gallery_files:
+                media_group: list[InputMediaPhoto] = []
+                opened_files = []
+                try:
+                    for index, gallery_file in enumerate(gallery_files[:10]):
+                        file_handle = gallery_file.open("rb")
+                        opened_files.append(file_handle)
+                        media_group.append(
+                            InputMediaPhoto(
+                                media=file_handle,
+                                caption=caption_text if index == 0 else None,
+                            )
+                        )
+                    await update.message.reply_media_group(media=media_group)
+                finally:
+                    for file_handle in opened_files:
+                        file_handle.close()
+            else:
+                with file_path.open("rb") as image_file:
+                    await update.message.reply_photo(
+                        photo=image_file,
+                        caption=caption_text,
+                    )
         stats["successful_downloads"] += 1
         write_history(
             {
                 "timestamp": int(time.time()),
                 "user_id": user_id,
                 "url": url,
-                "status": "sent_photo_video" if media_kind == "video" else "sent_photo_image",
+                "status": (
+                    "sent_photo_video"
+                    if media_kind == "video"
+                    else "sent_photo_gallery" if media_kind == "gallery" else "sent_photo_image"
+                ),
                 "source": source_label,
                 "saved_file": str(saved_file),
                 "file_size": file_path.stat().st_size,
@@ -1210,7 +1244,7 @@ async def process_tiktok_photo_post(
                 platform_name,
                 describe_photo_delivery_source(source_label, has_audio)
                 if media_kind == "video"
-                else describe_photo_image_source(source_label),
+                else "galeria visual premium" if media_kind == "gallery" else describe_photo_image_source(source_label),
                 saved_file,
                 file_size,
                 media_kind=media_kind,
