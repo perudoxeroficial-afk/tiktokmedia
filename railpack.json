@@ -4,7 +4,9 @@
     "install": {
       "commands": [
         "apt-get update -y",
-        "apt-get install -y nodejs npm"
+        "apt-get install -y nodejs npm",
+        "python -m venv /app/.venv",
+        "/app/.venv/bin/pip install -r requirements.txt"
       ]
     },
     "build": {
