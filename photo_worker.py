@@ -275,9 +275,42 @@ def build_photo_video(metadata: dict[str, object]) -> dict[str, object]:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def build_photo_preview(metadata: dict[str, object], reason: str) -> dict[str, object]:
+    photo_urls = metadata.get("images")
+    if not isinstance(photo_urls, list) or not photo_urls:
+        raise RuntimeError("La metadata no trae imagenes utilizables.")
+
+    video_id = str(metadata.get("id") or "photo_post")
+    title = str(metadata.get("desc") or f"Post de fotos {video_id}")
+    PHOTO_WORKER_DIR.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix="photo_worker_preview_"))
+
+    try:
+        raw_image_path = download_binary_file(str(photo_urls[0]), temp_dir / "preview_raw")
+        preview_path = normalize_image_for_ffmpeg(raw_image_path, temp_dir / "preview")
+        saved_file = PHOTO_WORKER_DIR / f"{sanitize_filename(title)}_{video_id}{preview_path.suffix.lower()}"
+        shutil.copy2(preview_path, saved_file)
+        return {
+            "status": "ok",
+            "title": title,
+            "photo_count": len(photo_urls),
+            "has_audio": False,
+            "media_kind": "image",
+            "saved_file": str(saved_file),
+            "note": f"Fallback a imagen por limite de conversion: {reason[:200]}",
+        }
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def run_photo_job(url: str) -> dict[str, object]:
     metadata = fetch_photo_metadata(url)
-    return build_photo_video(metadata)
+    try:
+        result = build_photo_video(metadata)
+        result["media_kind"] = "video"
+        return result
+    except Exception as exc:
+        return build_photo_preview(metadata, str(exc))
 
 
 def main() -> int:

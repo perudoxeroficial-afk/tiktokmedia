@@ -658,6 +658,12 @@ def describe_photo_delivery_source(source_label: str, has_audio: bool | None) ->
     return f"{source_label} con audio no disponible"
 
 
+def infer_media_kind(path: Path, explicit_kind: object = None) -> str:
+    if isinstance(explicit_kind, str) and explicit_kind in {"video", "image"}:
+        return explicit_kind
+    return "video" if path.suffix.lower() == ".mp4" else "image"
+
+
 def build_progress_text(platform_name: str, stage: str, source_label: str | None = None) -> str:
     steps = {
         "analyzing": (
@@ -920,6 +926,7 @@ async def process_tiktok_photo_post(
         if cached_result:
             saved_file, title, has_audio = cached_result
             file_path = saved_file
+            media_kind = infer_media_kind(saved_file)
             source_label = "cache"
             stats["cache_hits"] += 1
             await status.edit_text(
@@ -935,6 +942,7 @@ async def process_tiktok_photo_post(
             saved_file = Path(str(worker_result["saved_file"]))
             title = str(worker_result.get("title") or saved_file.stem)
             has_audio = bool(worker_result.get("has_audio"))
+            media_kind = infer_media_kind(saved_file, worker_result.get("media_kind"))
             file_path = saved_file
             update_cache(url, title, saved_file, has_audio)
     except Exception as exc:
@@ -964,19 +972,26 @@ async def process_tiktok_photo_post(
 
     try:
         file_size = format_file_size(file_path.stat().st_size)
-        with file_path.open("rb") as video_file:
-            await update.message.reply_video(
-                video=video_file,
-                caption=title[:1000],
-                supports_streaming=True,
-            )
+        if media_kind == "video":
+            with file_path.open("rb") as video_file:
+                await update.message.reply_video(
+                    video=video_file,
+                    caption=title[:1000],
+                    supports_streaming=True,
+                )
+        else:
+            with file_path.open("rb") as image_file:
+                await update.message.reply_photo(
+                    photo=image_file,
+                    caption=title[:1000],
+                )
         stats["successful_downloads"] += 1
         write_history(
             {
                 "timestamp": int(time.time()),
                 "user_id": user_id,
                 "url": url,
-                "status": "sent_photo_video",
+                "status": "sent_photo_video" if media_kind == "video" else "sent_photo_image",
                 "source": source_label,
                 "saved_file": str(saved_file),
                 "file_size": file_path.stat().st_size,
@@ -986,7 +1001,9 @@ async def process_tiktok_photo_post(
         await status.edit_text(
             build_success_text(
                 platform_name,
-                describe_photo_delivery_source(source_label, has_audio),
+                describe_photo_delivery_source(source_label, has_audio)
+                if media_kind == "video"
+                else f"{source_label} en imagen",
                 saved_file,
                 file_size,
             ),
@@ -1008,7 +1025,7 @@ async def process_tiktok_photo_post(
                     "timestamp": int(time.time()),
                     "user_id": user_id,
                     "url": url,
-                    "status": "sent_photo_document",
+                    "status": "sent_photo_document" if media_kind == "video" else "sent_photo_image_document",
                     "source": source_label,
                     "saved_file": str(saved_file),
                     "file_size": file_path.stat().st_size,
@@ -1018,7 +1035,9 @@ async def process_tiktok_photo_post(
             await status.edit_text(
                 build_document_success_text(
                     platform_name,
-                    describe_photo_delivery_source(source_label, has_audio),
+                    describe_photo_delivery_source(source_label, has_audio)
+                    if media_kind == "video"
+                    else f"{source_label} en imagen",
                     saved_file,
                     file_size,
                 ),
