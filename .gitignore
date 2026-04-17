@@ -2,3 +2,6 @@
 downloads/
 __pycache__/
 *.pyc
+photo_lab/
+photo_worker_output/
+toby_lab/node_modules/
