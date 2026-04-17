@@ -1,14 +1,17 @@
 {
   "$schema": "https://schema.railpack.com",
   "steps": {
-    "build": {
+    "install": {
       "commands": [
-        "...",
-        "npm install --prefix toby_lab"
+        "apt-get update -y",
+        "apt-get install -y nodejs npm"
       ]
+    },
+    "build": {
+      "commands": ["npm install --prefix toby_lab"]
     }
   },
   "deploy": {
-    "aptPackages": ["ffmpeg", "nodejs", "npm"]
+    "aptPackages": ["ffmpeg", "nodejs"]
   }
 }
