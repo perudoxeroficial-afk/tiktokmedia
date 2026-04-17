@@ -627,26 +627,49 @@ def build_status_text() -> str:
     )
 
 
-def build_success_text(platform_name: str, source_label: str, saved_file: Path, file_size: str) -> str:
+def build_success_text(
+    platform_name: str,
+    source_label: str,
+    saved_file: Path,
+    file_size: str,
+    media_kind: str = "video",
+) -> str:
+    delivery_note = (
+        "• Presentacion: <b>vista estática premium</b>\n"
+        "• Nota: <b>entregado en imagen por límites temporales de conversión</b>"
+        if media_kind == "image"
+        else f"• Archivo:\n<code>{saved_file}</code>"
+    )
     return (
         f"━━━━ <b>Entrega completada</b> ━━━━\n\n"
         f"• Plataforma: <b>{platform_name}</b>\n"
         f"• Origen: <b>{source_label}</b>\n"
         f"• Tamaño: <b>{file_size}</b>\n"
         f"• Estado: <b>entregado</b>\n"
-        f"• Archivo:\n<code>{saved_file}</code>"
+        f"{delivery_note}"
     )
 
 
-def build_document_success_text(platform_name: str, source_label: str, saved_file: Path, file_size: str) -> str:
+def build_document_success_text(
+    platform_name: str,
+    source_label: str,
+    saved_file: Path,
+    file_size: str,
+    media_kind: str = "video",
+) -> str:
+    delivery_note = (
+        "La entrega visual se resolvió como imagen de respaldo para mantener estabilidad.\n"
+        "• Presentacion: <b>vista estática premium</b>"
+        if media_kind == "image"
+        else f"Telegram no aceptó el MP4 como video, por lo que fue enviado como archivo.\n• Archivo:\n<code>{saved_file}</code>"
+    )
     return (
         f"━━━━ <b>Entrega completada</b> ━━━━\n\n"
         f"• Plataforma: <b>{platform_name}</b>\n"
         f"• Origen: <b>{source_label}</b>\n"
         f"• Tamaño: <b>{file_size}</b>\n"
         f"• Estado: <b>enviado como archivo</b>\n"
-        f"Telegram no aceptó el MP4 como video, por lo que fue enviado como archivo.\n"
-        f"• Archivo:\n<code>{saved_file}</code>"
+        f"{delivery_note}"
     )
 
 
@@ -656,6 +679,12 @@ def describe_photo_delivery_source(source_label: str, has_audio: bool | None) ->
     if has_audio is False:
         return f"{source_label} sin audio"
     return f"{source_label} con audio no disponible"
+
+
+def describe_photo_image_source(source_label: str) -> str:
+    if source_label == "cache":
+        return "cache visual premium"
+    return "entrega visual premium"
 
 
 def infer_media_kind(path: Path, explicit_kind: object = None) -> str:
@@ -1003,9 +1032,10 @@ async def process_tiktok_photo_post(
                 platform_name,
                 describe_photo_delivery_source(source_label, has_audio)
                 if media_kind == "video"
-                else f"{source_label} en imagen",
+                else describe_photo_image_source(source_label),
                 saved_file,
                 file_size,
+                media_kind=media_kind,
             ),
             parse_mode="HTML",
             reply_markup=build_post_download_menu(),
@@ -1037,9 +1067,10 @@ async def process_tiktok_photo_post(
                     platform_name,
                     describe_photo_delivery_source(source_label, has_audio)
                     if media_kind == "video"
-                    else f"{source_label} en imagen",
+                    else describe_photo_image_source(source_label),
                     saved_file,
                     file_size,
+                    media_kind=media_kind,
                 ),
                 parse_mode="HTML",
                 reply_markup=build_post_download_menu(),
