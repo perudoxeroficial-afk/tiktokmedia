@@ -687,6 +687,28 @@ def describe_photo_image_source(source_label: str) -> str:
     return "entrega visual premium"
 
 
+def build_photo_caption(title: str, media_kind: str, has_audio: bool | None) -> str:
+    cleaned = re.sub(r"\s+", " ", title).strip()
+    hashtags = re.findall(r"#\S+", cleaned)
+    body = re.sub(r"#\S+", "", cleaned).strip(" -\n\t")
+    body = body[:180].rstrip()
+
+    lines: list[str] = []
+    if body:
+        lines.append(body)
+
+    if hashtags:
+        lines.append(" ".join(hashtags[:4]))
+
+    if media_kind == "image":
+        lines.append("Vista estática premium")
+    elif has_audio is False:
+        lines.append("Version visual sin audio")
+
+    caption = "\n".join(line for line in lines if line).strip()
+    return caption[:1000] or "Entrega TikTok Photo"
+
+
 def infer_media_kind(path: Path, explicit_kind: object = None) -> str:
     if isinstance(explicit_kind, str) and explicit_kind in {"video", "image"}:
         return explicit_kind
@@ -1001,18 +1023,19 @@ async def process_tiktok_photo_post(
 
     try:
         file_size = format_file_size(file_path.stat().st_size)
+        caption_text = build_photo_caption(title, media_kind, has_audio)
         if media_kind == "video":
             with file_path.open("rb") as video_file:
                 await update.message.reply_video(
                     video=video_file,
-                    caption=title[:1000],
+                    caption=caption_text,
                     supports_streaming=True,
                 )
         else:
             with file_path.open("rb") as image_file:
                 await update.message.reply_photo(
                     photo=image_file,
-                    caption=title[:1000],
+                    caption=caption_text,
                 )
         stats["successful_downloads"] += 1
         write_history(
@@ -1044,10 +1067,11 @@ async def process_tiktok_photo_post(
         logger.exception("No se pudo enviar la publicación photo como video")
         try:
             file_size = format_file_size(file_path.stat().st_size)
+            caption_text = build_photo_caption(title, media_kind, has_audio)
             with file_path.open("rb") as document_file:
                 await update.message.reply_document(
                     document=document_file,
-                    caption=title[:1000],
+                    caption=caption_text,
                 )
             stats["successful_downloads"] += 1
             write_history(
