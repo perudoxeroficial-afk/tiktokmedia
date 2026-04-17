@@ -86,6 +86,66 @@ def normalize_audio_url(metadata: dict[str, object]) -> str | None:
     return None
 
 
+def summarize_ffmpeg_error(stderr: str) -> str:
+    cleaned_lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    if not cleaned_lines:
+        return "FFmpeg devolvio un error sin detalle."
+
+    relevant_lines = []
+    for line in cleaned_lines:
+        lowered = line.lower()
+        if "error" in lowered or "invalid" in lowered or "failed" in lowered or "could not" in lowered:
+            relevant_lines.append(line)
+
+    chosen_lines = relevant_lines[-4:] if relevant_lines else cleaned_lines[-4:]
+    return " | ".join(chosen_lines)[:500]
+
+
+def run_ffmpeg_for_photo_video(image_paths: list[Path], output_path: Path, audio_path: Path | None) -> tuple[bool, str]:
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    per_image_duration = 2.0
+    for image_path in image_paths:
+        command.extend(["-loop", "1", "-t", str(per_image_duration), "-i", str(image_path)])
+
+    filter_parts = []
+    concat_inputs = []
+    for index in range(len(image_paths)):
+        filter_parts.append(
+            f"[{index}:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
+            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"fps=30,format=yuv420p[v{index}]"
+        )
+        concat_inputs.append(f"[v{index}]")
+
+    filter_complex = ";".join(filter_parts + [f"{''.join(concat_inputs)}concat=n={len(image_paths)}:v=1:a=0[vout]"])
+    command.extend(["-filter_complex", filter_complex])
+
+    if audio_path:
+        command.extend(["-i", str(audio_path)])
+
+    command.extend(["-map", "[vout]"])
+
+    if audio_path:
+        command.extend(["-map", f"{len(image_paths)}:a", "-c:a", "aac", "-shortest"])
+
+    command.extend(
+        [
+            "-movflags",
+            "+faststart",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            "30",
+            str(output_path),
+        ]
+    )
+
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return result.returncode == 0, summarize_ffmpeg_error(result.stderr or "")
+
+
 def build_photo_video(metadata: dict[str, object]) -> dict[str, object]:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("FFmpeg no esta disponible en este entorno.")
@@ -120,61 +180,15 @@ def build_photo_video(metadata: dict[str, object]) -> dict[str, object]:
 
         output_path = temp_dir / "photo_post.mp4"
         saved_file = PHOTO_WORKER_DIR / f"{sanitize_filename(title)}_{video_id}.mp4"
-
-        command = ["ffmpeg", "-y"]
-        per_image_duration = 2.0
-        for image_path in image_paths:
-            command.extend(["-loop", "1", "-t", str(per_image_duration), "-i", str(image_path)])
-
-        filter_parts = []
-        concat_inputs = []
-        for index in range(len(image_paths)):
-            filter_parts.append(
-                f"[{index}:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
-                f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
-                f"fps=30,format=yuv420p[v{index}]"
-            )
-            concat_inputs.append(f"[v{index}]")
-
-        filter_complex = ";".join(filter_parts + [f"{''.join(concat_inputs)}concat=n={len(image_paths)}:v=1:a=0[vout]"])
-        command.extend(["-filter_complex", filter_complex])
-
-        if audio_path:
-            command.extend(["-i", str(audio_path)])
-
-        command.extend(
-            [
-                "-map",
-                "[vout]",
-            ]
-        )
-
-        if audio_path:
-            command.extend(
-                [
-                    "-map",
-                    f"{len(image_paths)}:a",
-                    "-shortest",
-                ]
-            )
-
-        command.extend(
-            [
-                "-movflags",
-                "+faststart",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-r",
-                "30",
-                str(output_path),
-            ]
-        )
-
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip()[:500] or "FFmpeg devolvio un error.")
+        success, ffmpeg_error = run_ffmpeg_for_photo_video(image_paths, output_path, audio_path)
+        if not success and audio_path:
+            success, retry_error = run_ffmpeg_for_photo_video(image_paths, output_path, None)
+            if success:
+                has_audio = False
+            else:
+                raise RuntimeError(f"FFmpeg fallo con audio y sin audio: {retry_error or ffmpeg_error}")
+        elif not success:
+            raise RuntimeError(ffmpeg_error or "FFmpeg devolvio un error.")
 
         shutil.copy2(output_path, saved_file)
         return {
