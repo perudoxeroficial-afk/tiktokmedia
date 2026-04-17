@@ -16,6 +16,7 @@
     }
   },
   "deploy": {
-    "aptPackages": ["ffmpeg", "nodejs"]
+    "aptPackages": ["ffmpeg", "nodejs"],
+    "startCommand": "/app/.venv/bin/python bot.py"
   }
 }
